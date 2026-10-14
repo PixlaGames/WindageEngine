@@ -1,0 +1,15 @@
+# A single triangle with a Blinn-Phong material, used by MaterialTests.
+#
+# **It exists because an OBJ cannot say how rough a surface is.** Model I/O returns a roughness of
+# 0.9 for every OBJ material whatever the file contains — `Ns`, `Pr` and `Pm` alike — so the specular
+# exponent is the only shininess the format actually carries through.
+mtllib box-exponent.mtl
+v 0 0 0
+v 1 0 0
+v 0 1 0
+vt 0 0
+vt 1 0
+vt 0 1
+vn 0 0 1
+usemtl glossy
+f 1/1/1 2/2/1 3/3/1

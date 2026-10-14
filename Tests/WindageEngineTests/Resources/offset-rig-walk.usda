@@ -1,0 +1,58 @@
+#usda 1.0
+# A clip file for the same rig as offset-rig.usda, used by RigLoaderTests.
+#
+# **Its rest transforms are deliberately wrong**, and that is what it is for. A per-clip export from a
+# real toolchain carries a full copy of the skeleton whose rest pose is wherever the exporter left the
+# rig — usually the clip's first frame — not the rig's actual rest pose. Measured on a real character:
+# one joint reported (10.42, 4.08, 7.84) in the base file and (3.16, 1.17, 7.84) in the walk file.
+#
+# Here the child's rest translation is (0, 9, 0) where the base rig says (0, 1, 0). A loader that
+# merges skeletons out of clip files picks this up, and then every joint the clip does not animate
+# stands in the wrong place — a fault that changes depending on which files were loaded.
+#
+# Z-up and in centimetres as well, matching what that toolchain actually produces.
+(
+    defaultPrim = "Root"
+    metersPerUnit = 0.01
+    upAxis = "Z"
+    timeCodesPerSecond = 24
+    startTimeCode = 0
+    endTimeCode = 12
+)
+
+def SkelRoot "Root"
+{
+    def Skeleton "Skel" (
+        prepend apiSchemas = ["SkelBindingAPI"]
+    )
+    {
+        uniform token[] joints = ["root", "root/mid"]
+        uniform matrix4d[] bindTransforms = [
+            ( (1,0,0,0), (0,1,0,0), (0,0,1,0), (5,0,0,1) ),
+            ( (1,0,0,0), (0,1,0,0), (0,0,1,0), (5,9,0,1) )
+        ]
+        uniform matrix4d[] restTransforms = [
+            ( (1,0,0,0), (0,1,0,0), (0,0,1,0), (5,0,0,1) ),
+            ( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,9,0,1) )
+        ]
+        rel skel:animationSource = </Root/Stride>
+    }
+
+    # A half turn about Z, so it is unmistakably not the base file's quarter turn.
+    def SkelAnimation "Stride"
+    {
+        uniform token[] joints = ["root", "root/mid"]
+        float3[] translations.timeSamples = {
+            0:  [(5,0,0), (0,1,0)],
+            12: [(5,0,0), (0,1,0)],
+        }
+        quatf[] rotations.timeSamples = {
+            0:  [(1,0,0,0), (1,0,0,0)],
+            12: [(1,0,0,0), (0,0,0,1)],
+        }
+        half3[] scales.timeSamples = {
+            0:  [(1,1,1), (1,1,1)],
+            12: [(1,1,1), (1,1,1)],
+        }
+    }
+}

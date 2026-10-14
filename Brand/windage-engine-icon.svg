@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Windage Engine">
+  <title>Windage Engine</title>
+  <desc>App icon on the 1024 grid. Generated from EngineMark.outline — see Brand/README.md.</desc>
+  <defs><linearGradient id="ground" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2A2F37"/><stop offset="1" stop-color="#0C0E11"/></linearGradient></defs>
+  <rect x="100" y="100" width="824" height="824" rx="185.4" fill="url(#ground)"/>
+  <rect x="103" y="103" width="818" height="818" rx="182.4" fill="none" stroke="#FFFFFF" stroke-opacity="0.07" stroke-width="6"/>
+  <polygon fill="#F2F4F7" points="245.35,351.44 342.84,351.44 413.49,604.31 463.26,489.06 560.74,489.06 600.64,547.87 681.16,259.69 778.65,259.69 669.7,649.63 572.21,649.63 522.83,576.86 451.79,741.38 354.3,741.38"/>
+</svg>

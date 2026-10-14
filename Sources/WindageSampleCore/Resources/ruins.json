@@ -1,0 +1,900 @@
+{
+  "formatVersion" : 1,
+  "groundSurface" : "dirt",
+  "lights" : [
+    {
+      "color" : [
+        1.0,
+        0.74,
+        0.44
+      ],
+      "direction" : [
+        -0.7071,
+        -0.4243,
+        -0.5657
+      ],
+      "innerAngle" : 13,
+      "intensity" : 900,
+      "outerAngle" : 24,
+      "position" : [
+        11.0,
+        6.0,
+        -4.0
+      ],
+      "range" : 26
+    },
+    {
+      "color" : [
+        0.55,
+        0.78,
+        1.0
+      ],
+      "direction" : [
+        -0.25,
+        -1.0,
+        -0.1
+      ],
+      "innerAngle" : 14,
+      "intensity" : 300,
+      "outerAngle" : 30,
+      "position" : [
+        4.6,
+        5.0,
+        -23
+      ],
+      "range" : 16
+    },
+    {
+      "color" : [
+        1.0,
+        0.55,
+        0.28
+      ],
+      "direction" : [
+        0.2,
+        -1.0,
+        -0.35
+      ],
+      "innerAngle" : 10,
+      "intensity" : 320,
+      "outerAngle" : 26,
+      "position" : [
+        -3.0,
+        5.2,
+        -33
+      ],
+      "range" : 18
+    }
+  ],
+  "markers" : [
+    {
+      "anchor" : "absolute",
+      "kind" : "spawn",
+      "name" : "start",
+      "position" : [
+        0,
+        0,
+        6
+      ],
+      "values" : {
+        "pitch" : -6
+      }
+    },
+    {
+      "anchor" : "absolute",
+      "kind" : "objective",
+      "position" : [
+        -4,
+        0,
+        -14
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "kind" : "objective",
+      "position" : [
+        5,
+        0,
+        -21
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "kind" : "objective",
+      "position" : [
+        -6,
+        0,
+        -30
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "kind" : "objective",
+      "position" : [
+        3,
+        0,
+        -37
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "kind" : "objective",
+      "position" : [
+        -2,
+        0,
+        -45
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "kind" : "objective",
+      "position" : [
+        6,
+        0,
+        -52
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "kind" : "objective",
+      "position" : [
+        -5,
+        0,
+        -58
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "kind" : "objective",
+      "position" : [
+        0,
+        0,
+        -66
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "kind" : "objective",
+      "position" : [
+        4,
+        0,
+        -70
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "kind" : "figure",
+      "name" : "greeter",
+      "position" : [
+        1.5,
+        0,
+        1
+      ],
+      "yaw" : 3.0
+    },
+    {
+      "anchor" : "absolute",
+      "kind" : "figure",
+      "name" : "sentry",
+      "position" : [
+        -5,
+        0,
+        -18
+      ],
+      "yaw" : -0.6
+    },
+    {
+      "anchor" : "absolute",
+      "kind" : "figure",
+      "name" : "lookout",
+      "position" : [
+        4,
+        0,
+        -33
+      ],
+      "yaw" : 2.4
+    }
+  ],
+  "name" : "RUINS",
+  "placements" : [
+    {
+      "anchor" : "absolute",
+      "mesh" : "ground",
+      "position" : [
+        0,
+        0,
+        0
+      ],
+      "tags" : [
+        "ground"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "pillar",
+      "position" : [
+        -7,
+        0,
+        -8
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid",
+        "landmark"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "pillar",
+      "position" : [
+        7,
+        0,
+        -8
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid",
+        "landmark"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "pillar",
+      "position" : [
+        -7,
+        0,
+        -17
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid",
+        "landmark"
+      ],
+      "yaw" : 0.12
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "pillar",
+      "position" : [
+        7,
+        0,
+        -17
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid",
+        "landmark"
+      ],
+      "yaw" : 0.12
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "pillar",
+      "position" : [
+        -7,
+        0,
+        -26
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid",
+        "landmark"
+      ],
+      "yaw" : 0.24
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "pillar",
+      "position" : [
+        7,
+        0,
+        -26
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid",
+        "landmark"
+      ],
+      "yaw" : 0.24
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "pillar",
+      "position" : [
+        -7,
+        0,
+        -35
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid",
+        "landmark"
+      ],
+      "yaw" : 0.35999998
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "pillar",
+      "position" : [
+        7,
+        0,
+        -35
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid",
+        "landmark"
+      ],
+      "yaw" : 0.35999998
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "pillar",
+      "position" : [
+        -7,
+        0,
+        -44
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid",
+        "landmark"
+      ],
+      "yaw" : 0.48
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "pillar",
+      "position" : [
+        7,
+        0,
+        -44
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid",
+        "landmark"
+      ],
+      "yaw" : 0.48
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "pillar",
+      "position" : [
+        -7,
+        0,
+        -53
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid",
+        "landmark"
+      ],
+      "yaw" : 0.59999996
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "pillar",
+      "position" : [
+        7,
+        0,
+        -53
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid",
+        "landmark"
+      ],
+      "yaw" : 0.59999996
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        -6.6000004,
+        0,
+        -62
+      ],
+      "scale" : 2.4,
+      "surface" : "wood",
+      "tags" : [
+        "solid"
+      ],
+      "yaw" : -0.6
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        -4.4,
+        0,
+        -62
+      ],
+      "scale" : 2.4,
+      "surface" : "wood",
+      "tags" : [
+        "solid"
+      ],
+      "yaw" : -0.4
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        -2.2,
+        0,
+        -62
+      ],
+      "scale" : 2.4,
+      "surface" : "wood",
+      "tags" : [
+        "solid"
+      ],
+      "yaw" : -0.2
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        0,
+        0,
+        -62
+      ],
+      "scale" : 2.4,
+      "surface" : "wood",
+      "tags" : [
+        "solid"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        2.2,
+        0,
+        -62
+      ],
+      "scale" : 2.4,
+      "surface" : "wood",
+      "tags" : [
+        "solid"
+      ],
+      "yaw" : 0.2
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        4.4,
+        0,
+        -62
+      ],
+      "scale" : 2.4,
+      "surface" : "wood",
+      "tags" : [
+        "solid"
+      ],
+      "yaw" : 0.4
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        6.6000004,
+        0,
+        -62
+      ],
+      "scale" : 2.4,
+      "surface" : "wood",
+      "tags" : [
+        "solid"
+      ],
+      "yaw" : 0.6
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        -4,
+        0,
+        -14
+      ],
+      "scale" : 1.5,
+      "surface" : "wood",
+      "tags" : [
+        "solid",
+        "objective"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        5,
+        0,
+        -21
+      ],
+      "scale" : 1.5,
+      "surface" : "wood",
+      "tags" : [
+        "solid",
+        "objective"
+      ],
+      "yaw" : 0.55
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        -6,
+        0,
+        -30
+      ],
+      "scale" : 1.5,
+      "surface" : "wood",
+      "tags" : [
+        "solid",
+        "objective"
+      ],
+      "yaw" : 1.1
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        3,
+        0,
+        -37
+      ],
+      "scale" : 1.5,
+      "surface" : "wood",
+      "tags" : [
+        "solid",
+        "objective"
+      ],
+      "yaw" : 1.6500001
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        -2,
+        0,
+        -45
+      ],
+      "scale" : 1.5,
+      "surface" : "wood",
+      "tags" : [
+        "solid",
+        "objective"
+      ],
+      "yaw" : 2.2
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        6,
+        0,
+        -52
+      ],
+      "scale" : 1.5,
+      "surface" : "wood",
+      "tags" : [
+        "solid",
+        "objective"
+      ],
+      "yaw" : 2.75
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        -5,
+        0,
+        -58
+      ],
+      "scale" : 1.5,
+      "surface" : "wood",
+      "tags" : [
+        "solid",
+        "objective"
+      ],
+      "yaw" : 3.3000002
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        0,
+        0,
+        -66
+      ],
+      "scale" : 1.5,
+      "surface" : "wood",
+      "tags" : [
+        "solid",
+        "objective"
+      ],
+      "yaw" : 3.8500001
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        4,
+        0,
+        -70
+      ],
+      "scale" : 1.5,
+      "surface" : "wood",
+      "tags" : [
+        "solid",
+        "objective"
+      ],
+      "yaw" : 4.4
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "step",
+      "position" : [
+        4.5,
+        -0.7,
+        4
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "step",
+      "position" : [
+        4.5,
+        -0.4,
+        3
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "step",
+      "position" : [
+        4.5,
+        -0.1,
+        2
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "step_wood",
+      "position" : [
+        4.5,
+        0.2,
+        1
+      ],
+      "surface" : "wood",
+      "tags" : [
+        "solid"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "step_wood",
+      "position" : [
+        4.5,
+        0.2,
+        0
+      ],
+      "surface" : "wood",
+      "tags" : [
+        "solid"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "step_wood",
+      "position" : [
+        4.5,
+        0.2,
+        -1
+      ],
+      "surface" : "wood",
+      "tags" : [
+        "solid"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "light" : {
+        "color" : [
+          1.0,
+          0.6,
+          0.3
+        ],
+        "intensity" : 60,
+        "position" : [
+          0,
+          1.8,
+          0
+        ],
+        "range" : 14
+      },
+      "mesh" : "brazier",
+      "position" : [
+        -4.0,
+        0,
+        -10
+      ],
+      "sound" : {
+        "name" : "crackle",
+        "offset" : [
+          0,
+          1.0,
+          0
+        ],
+        "volume" : 0.8
+      },
+      "surface" : "metal",
+      "tags" : [
+        "solid"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "light" : {
+        "color" : [
+          1.0,
+          0.86,
+          0.52
+        ],
+        "intensity" : 55,
+        "position" : [
+          0,
+          1.8,
+          0
+        ],
+        "range" : 14
+      },
+      "mesh" : "brazier",
+      "position" : [
+        -3.5,
+        0,
+        -28
+      ],
+      "sound" : {
+        "name" : "crackle",
+        "offset" : [
+          0,
+          1.0,
+          0
+        ],
+        "volume" : 0.8
+      },
+      "surface" : "metal",
+      "tags" : [
+        "solid"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        -3.0,
+        0,
+        -4
+      ],
+      "scale" : 1.5,
+      "surface" : "wood",
+      "tags" : [
+        "solid"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        3.0,
+        0,
+        -4
+      ],
+      "scale" : 1.5,
+      "surface" : "wood",
+      "tags" : [
+        "solid"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "step",
+      "position" : [
+        -1.5,
+        1.5,
+        -4
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid",
+        "lintel"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "step",
+      "position" : [
+        1.5,
+        1.5,
+        -4
+      ],
+      "surface" : "stone",
+      "tags" : [
+        "solid",
+        "lintel"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "step_wood",
+      "position" : [
+        7.5,
+        -0.7,
+        0
+      ],
+      "surface" : "wood",
+      "tags" : [
+        "solid",
+        "lift"
+      ]
+    },
+    {
+      "anchor" : "absolute",
+      "mesh" : "box",
+      "position" : [
+        5.55,
+        1.2,
+        1
+      ],
+      "scale" : 0.85,
+      "surface" : "wood",
+      "tags" : [
+        "solid",
+        "piston"
+      ],
+      "yaw" : 1.5707964
+    }
+  ],
+  "settings" : {},
+  "sky" : {
+    "ground" : [
+      0.1,
+      0.09,
+      0.07
+    ],
+    "horizon" : [
+      0.3,
+      0.28,
+      0.26
+    ],
+    "sunAngularRadius" : 0.1,
+    "sunPitch" : 11,
+    "sunRadiance" : [
+      38,
+      24,
+      13
+    ],
+    "sunYaw" : 240,
+    "zenith" : [
+      0.15,
+      0.17,
+      0.21
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+# Windage Engine — its own repository as of 2026-09-07.
+#
+# It used to live inside the Pixla Games studio repo and relied on that repo's .gitignore. It has
+# its own now, because an engine that other people are meant to clone and build with cannot depend
+# on the ignore rules of a repo they will never see.
+
+# SwiftPM build output.
+.build/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+.swiftpm/xcode/xcuserdata/
+
+# Xcode per-user state. Scheme *management* is per-user — which schemes are shown, in what order —
+# and committing it means every clone fights over one person's Xcode window.
+xcuserdata/
+*.xcuserstate
+
+.DS_Store

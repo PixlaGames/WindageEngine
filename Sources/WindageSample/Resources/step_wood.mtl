@@ -1,0 +1,10 @@
+# The surface for step_wood.obj: the crate's planed timber. Read through the obj's `mtllib` line,
+# like every other surface in the sample.
+# **`bump`, not `map_Bump`** — Model I/O's OBJ reader recognises only this spelling.
+newmtl timber
+Kd 1 1 1
+Ks 0 0 0
+# planed timber, as the crates: Ns 24 becomes roughness 0.53.
+Ns 24
+map_Kd crate.png
+bump crate_normal.png

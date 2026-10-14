@@ -1,0 +1,14 @@
+# The surface for step.obj. Model I/O reads this through the obj's `mtllib` line, which is
+# how a bought asset carries its materials — the sample uses the same path rather than
+# assigning textures in code, so that path is the one that gets tested.
+# **`bump`, not `map_Bump`.** Model I/O's OBJ reader recognises only this
+# spelling for a normal map: `map_Bump` — which is what Blender and Maya
+# write — and `norm` are both read and silently dropped, with no property
+# on the material and nothing logged.
+newmtl stone
+Kd 1 1 1
+Ks 0 0 0
+# cut stone: rough, and the mortar rougher still. Ns 6 becomes roughness 0.71 — see Material.roughness(fromSpecularExponent:).
+Ns 6
+map_Kd stone.png
+bump stone_normal.png

@@ -1,0 +1,58 @@
+#usda 1.0
+# A textured quad with a UsdPreviewSurface, used by MaterialTests.
+#
+# **It carries a textured diffuse on purpose.** That is what makes Model I/O produce *two*
+# properties with the `.baseColor` semantic — a float3 default of 0.18 grey named `baseColor`, and
+# the texture named `diffuseColor` — which is the trap `Material.init(_:)` exists to handle. A
+# material with a plain colour and no map would never show it.
+(
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "Root"
+{
+    def Mesh "Box" ( prepend apiSchemas = ["MaterialBindingAPI"] )
+    {
+        rel material:binding = </Root/Mat>
+        point3f[] points = [(0,0,0), (1,0,0), (1,1,0), (0,1,0)]
+        texCoord2f[] primvars:st = [(0,0), (1,0), (1,1), (0,1)] ( interpolation = "vertex" )
+        normal3f[] normals = [(0,0,1), (0,0,1), (0,0,1), (0,0,1)] ( interpolation = "vertex" )
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0,1,2,3]
+        uniform token subdivisionScheme = "none"
+    }
+
+    def Material "Mat"
+    {
+        token outputs:surface.connect = </Root/Mat/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor.connect = </Root/Mat/Albedo.outputs:rgb>
+            float inputs:metallic = 0.1
+            float inputs:roughness = 0.65
+            color3f inputs:emissiveColor = (0.02, 0.01, 0)
+            token outputs:surface
+        }
+
+        def Shader "Albedo"
+        {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @material-map.png@
+            float2 inputs:st.connect = </Root/Mat/Reader.outputs:result>
+            token inputs:wrapS = "repeat"
+            token inputs:wrapT = "repeat"
+            float3 outputs:rgb
+        }
+
+        def Shader "Reader"
+        {
+            uniform token info:id = "UsdPrimvarReader_float2"
+            string inputs:varname = "st"
+            float2 outputs:result
+        }
+    }
+}

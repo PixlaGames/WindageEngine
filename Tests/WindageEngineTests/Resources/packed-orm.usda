@@ -1,0 +1,57 @@
+#usda 1.0
+# A material with occlusion, roughness and metalness connected to one packed texture, used by
+# MaterialTests.
+#
+# **It carries no scalars for those inputs, and that is the point.** A file that connects an input to
+# a texture supplies nothing else for it, so whatever reads the material keeps its own default — and
+# a default of 0 for metalness multiplies the map away entirely.
+#
+# It also records what Model I/O loses: this file says roughness reads `.g` and metalness `.b`, and
+# the material that arrives names the same file for both with nothing to distinguish them.
+(
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "Root"
+{
+    def Mesh "Q" ( prepend apiSchemas = ["MaterialBindingAPI"] )
+    {
+        rel material:binding = </Root/M>
+        point3f[] points = [(0,0,0), (1,0,0), (0,1,0)]
+        texCoord2f[] primvars:st = [(0,0), (1,0), (0,1)] ( interpolation = "vertex" )
+        normal3f[] normals = [(0,0,1), (0,0,1), (0,0,1)] ( interpolation = "vertex" )
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0,1,2]
+        uniform token subdivisionScheme = "none"
+    }
+
+    def Material "M"
+    {
+        token outputs:surface.connect = </Root/M/S.outputs:surface>
+        def Shader "S"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            float inputs:roughness.connect = </Root/M/ORM.outputs:g>
+            float inputs:metallic.connect = </Root/M/ORM.outputs:b>
+            float inputs:occlusion.connect = </Root/M/ORM.outputs:r>
+            color3f inputs:emissiveColor.connect = </Root/M/EM.outputs:rgb>
+            token outputs:surface
+        }
+        def Shader "ORM"
+        {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @orm.png@
+            float outputs:r
+            float outputs:g
+            float outputs:b
+        }
+        def Shader "EM"
+        {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @orm.png@
+            float3 outputs:rgb
+        }
+    }
+}

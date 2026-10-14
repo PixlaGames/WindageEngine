@@ -1,0 +1,8 @@
+# The surface for turntable.obj: the same cut stone as the steps.
+# **`bump`, not `map_Bump`** — Model I/O's OBJ reader recognises only this spelling.
+newmtl stone
+Kd 1 1 1
+Ks 0 0 0
+Ns 6
+map_Kd stone.png
+bump stone_normal.png

@@ -1,0 +1,17 @@
+#usda 1.0
+# A one-triangle asset in the space a real character export actually arrives in, used by
+# AssetOrientationTests: **Z-up, and a hundred units to the metre**. Neither is a mistake anybody
+# made — they are the conventions of the tools a bought character passes through.
+(
+    defaultPrim = "Thing"
+    metersPerUnit = 0.01
+    upAxis = "Z"
+)
+
+def Mesh "Thing"
+{
+    point3f[] points = [(0, 0, 0), (100, 0, 0), (0, 0, 176)]
+    int[] faceVertexCounts = [3]
+    int[] faceVertexIndices = [0, 1, 2]
+    uniform token subdivisionScheme = "none"
+}
