@@ -6,6 +6,7 @@
 import Testing
 import Foundation
 import Metal
+import ModelIO
 @testable import WindageEngine
 
 /// The GPU half of materials.
@@ -124,5 +125,72 @@ struct TextureStoreTests {
         let texture = try store.texture(.url(try mapURL), isColor: true)
         #expect(store.allocations.contains { ($0 as? MTLTexture) === texture })
         #expect(store.allocations.contains { ($0 as? MTLTexture) === store.white })
+    }
+
+    /// **A texture packed in a `.usdz` used to draw white** (2026-10-22): Model I/O gave the package's own URL,
+    /// which no image loader opens, and the fallback was drawn. The entry now rides as the URL's fragment.
+    @Test("A texture inside a .usdz is read out of the package")
+    func textureInsideAUSDZ() throws {
+        guard let store = try makeStore() else { return }
+        let url = try #require(Bundle.module.url(forResource: "textured-quad-packed", withExtension: "usdz"))
+        let asset = MDLAsset(url: url)
+        var found: MDLMaterial?
+        func descend(_ object: MDLObject) {
+            if let mesh = object as? MDLMesh {
+                for submesh in (mesh.submeshes as? [MDLSubmesh] ?? []) where found == nil { found = submesh.material }
+            }
+            for child in object.children.objects { descend(child) }
+        }
+        for index in 0..<asset.count { descend(asset.object(at: index)) }
+        let material = Material(try #require(found))
+        let source = try #require(material.textures[.baseColor])
+        guard case .url(let packed) = source else { Issue.record("expected a URL"); return }
+        #expect(packed.pathExtension == "usdz")
+        #expect(packed.fragment(percentEncoded: false) == "textures/material-map.png")
+
+        let texture = try store.texture(source, isColor: true)
+        #expect(texture.width == 256 && texture.height == 256, "the map is 256 px square; the fallback is 1")
+
+        // The package itself, without the entry, is not an image — what was drawn white before.
+        var bare = URLComponents(url: packed, resolvingAgainstBaseURL: false)!
+        bare.fragment = nil
+        #expect(throws: (any Error).self) { try store.texture(.url(bare.url!), isColor: true) }
+    }
+
+    /// A damaged package is refused, never read past its end: every byte count cut short in turn.
+    @Test("A truncated .usdz is refused, not read past its end")
+    func truncatedUSDZIsRefused() throws {
+        let url = try #require(Bundle.module.url(forResource: "textured-quad-packed", withExtension: "usdz"))
+        let whole = try Data(contentsOf: url)
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let cut = folder.appending(path: "cut.usdz")
+        for length in stride(from: 0, to: whole.count, by: 97) {
+            try whole.prefix(length).write(to: cut)
+            #expect(throws: (any Error).self) { try USDZArchive.entry("textures/material-map.png", in: cut) }
+        }
+        // And a central directory whose name runs past the end of the file.
+        var bent = whole
+        if let end = (0...(bent.count - 22)).reversed().first(where: { bent[$0] == 0x50 && bent[$0+1] == 0x4B && bent[$0+2] == 5 && bent[$0+3] == 6 }) {
+            let directory = Int(bent[end+16]) | Int(bent[end+17]) << 8 | Int(bent[end+18]) << 16 | Int(bent[end+19]) << 24
+            bent[directory + 28] = 0xFF; bent[directory + 29] = 0xFF
+            try bent.write(to: cut)
+            #expect(throws: (any Error).self) { try USDZArchive.entry("textures/material-map.png", in: cut) }
+        }
+    }
+
+    @Test("Forgetting a file loads it afresh, packed textures included, and leaves others cached")
+    func forgettingAFile() throws {
+        guard let store = try makeStore() else { return }
+        let map = try mapURL
+        let package = try #require(Bundle.module.url(forResource: "textured-quad-packed", withExtension: "usdz"))
+        var packed = URLComponents(url: package, resolvingAgainstBaseURL: false)!
+        packed.fragment = "textures/material-map.png"
+        let before = try store.texture(.url(packed.url!), isColor: true)
+        let other = try store.texture(.url(map), isColor: true)
+        store.forget(file: package)
+        #expect(try store.texture(.url(packed.url!), isColor: true) !== before)
+        #expect(try store.texture(.url(map), isColor: true) === other)
     }
 }

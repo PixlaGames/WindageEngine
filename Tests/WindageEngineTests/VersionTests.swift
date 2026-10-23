@@ -75,7 +75,10 @@ struct ChangelogTests {
     }
 
     /// Before the first release there is nothing to match, and the version is the one that release will be.
-    @Test("The newest release in the changelog is the version the engine reports")
+    /// After it, the version is the newest release **or the next one, bumped and waiting to be cut** — a release
+    /// is bumped first and cut second. What may never happen
+    /// is a release newer than the version the engine reports.
+    @Test("The engine reports the newest release, or the version bumped past it")
     func changelogMatchesTheVersion() throws {
         let listed = releases(in: try changelog)
         guard let newest = listed.first else {
@@ -83,8 +86,8 @@ struct ChangelogTests {
                     "nothing is released yet, so the engine should report 1.0.0, not \(Engine.version)")
             return
         }
-        #expect(newest == Engine.semanticVersion,
-                "CHANGELOG.md's newest entry is \(newest) but Engine.version is \(Engine.version)")
+        #expect(newest <= Engine.semanticVersion,
+                "CHANGELOG.md's newest release is \(newest), newer than Engine.version \(Engine.version)")
     }
 
     @Test("Releases are listed newest first")

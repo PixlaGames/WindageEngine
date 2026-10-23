@@ -4,6 +4,33 @@ Every release of Windage Engine, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-10-23
+
+### Added
+
+- **glTF and GLB loading** — `MeshLoader` now loads `.gltf` and `.glb` the way it loads USD: meshes placed by their
+  nodes, metallic-roughness materials with their textures, and compressed files (meshopt, Draco, quantized
+  attributes, KTX2 textures through Basis Universal). Skins and animation are not read; a skinned mesh arrives in
+  its bind pose. A file requiring an extension the engine does not read is refused with `GLTFError`.
+- **`ImportedModel`**, `ImportedMesh`, `ImportedMaterial`, `ImportedTextureReference` and `ImportedTexture` — a
+  model as plain values, for a tool that wants what a file holds without drawing it. `ImportedModel.read(gltf:)` and
+  `MeshLoader.model(url:)` make one from glTF; `MeshLoader.load(model:named:device:vertexDescriptor:semantics:)` draws one a game's own
+  reader made.
+- Google's Draco decoder (Apache 2.0) and Binomial's Basis Universal transcoder with Zstandard (Apache 2.0 and BSD)
+  are vendored for this and linked into every game built with the engine, so **a game ships their licenses**
+  beside meshoptimizer's — in `Sources/Draco` and `Sources/Basis`.
+- **`TextureStore.forget(file:)`** — drops the textures loaded from a file, or from inside a `.usdz`, so the next
+  request reads it again. For an editor whose files are exported over while it runs.
+
+### Fixed
+
+- **Archiving for the Mac App Store** — the engine now compiles for Intel as well as Apple silicon, so a game's
+  universal Release build or archive no longer fails on `Float16`, which Swift does not have on Intel. Metal 4
+  still needs Apple silicon to run; nothing draws differently.
+- **Textures inside a `.usdz` file** — they drew white, because the texture's address was the package itself. They
+  now load from inside the package. A packed texture's `TextureSource.url` is the `.usdz` with the texture's path in
+  the package as its fragment.
+
 ## [1.0.0] — 2026-10-14
 
 **Initial release.** A Swift 6 and Metal 4 game engine for the Mac, extracted from working games.
@@ -40,4 +67,5 @@ Every release of Windage Engine, newest first. Format follows
   `FrameRenderer.render(into:)`.
 - **A sample game** built only against the public API. `swift run WindageSample`.
 
+[1.1.0]: https://github.com/PixlaGames/WindageEngine/releases/tag/1.1.0
 [1.0.0]: https://github.com/PixlaGames/WindageEngine/releases/tag/1.0.0

@@ -174,12 +174,30 @@ public final class TextureStore {
         ]
 
         do {
-            let texture = try loader.newTexture(URL: url, options: options)
-            texture.label = url.lastPathComponent
+            let texture: MTLTexture
+            // A texture inside a `.usdz`: the package's URL, the entry as its fragment (`textureSource`).
+            if url.isFileURL, url.pathExtension.lowercased() == "usdz", let entry = url.fragment(percentEncoded: false) {
+                texture = try loader.newTexture(data: try USDZArchive.entry(entry, in: url), options: options)
+                texture.label = (entry as NSString).lastPathComponent
+            } else {
+                texture = try loader.newTexture(URL: url, options: options)
+                texture.label = url.lastPathComponent
+            }
             cache[key] = texture
             return texture
         } catch {
             throw TextureStoreError.loadFailed(url.lastPathComponent, underlying: error)
+        }
+    }
+
+    /// Drops every texture loaded from `file` — or from inside it, for a `.usdz` — so the next request reads the
+    /// file again. For a tool whose files change on disk while it runs: an editor reloading a prop someone exported
+    /// over. A game, whose files do not change, never needs it.
+    public func forget(file: URL) {
+        let path = file.standardizedFileURL.path
+        cache = cache.filter { key, _ in
+            guard case .url(let url) = key.source else { return true }
+            return url.standardizedFileURL.path != path
         }
     }
 

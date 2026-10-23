@@ -136,10 +136,10 @@ public nonisolated final class EnvironmentMap: @unchecked Sendable {
                              mip: Int,
                              size: Int,
                              radiance: @escaping @Sendable (SIMD3<Float>) -> SIMD3<Float>) {
-        let bytesPerPixel = MemoryLayout<Float16>.size * 4
+        let bytesPerPixel = MemoryLayout<UInt16>.size * 4
         let bytesPerRow = size * bytesPerPixel
         // Each face writes only its own sixth, so the workers never touch the same element.
-        nonisolated(unsafe) let faces = UnsafeMutableBufferPointer<Float16>.allocate(capacity: size * size * 4 * 6)
+        nonisolated(unsafe) let faces = UnsafeMutableBufferPointer<UInt16>.allocate(capacity: size * size * 4 * 6)
         defer { faces.deallocate() }
 
         DispatchQueue.concurrentPerform(iterations: 6) { face in
@@ -152,10 +152,10 @@ public nonisolated final class EnvironmentMap: @unchecked Sendable {
                     let v = (Float(y) + 0.5) / Float(size)
                     let color = radiance(direction(face: face, u: u, v: v))
                     let index = base + (y * size + x) * 4
-                    faces[index] = Float16(color.x)
-                    faces[index + 1] = Float16(color.y)
-                    faces[index + 2] = Float16(color.z)
-                    faces[index + 3] = 1
+                    faces[index] = halfBits(color.x)
+                    faces[index + 1] = halfBits(color.y)
+                    faces[index + 2] = halfBits(color.z)
+                    faces[index + 3] = halfBits(1)
                 }
             }
         }
@@ -169,6 +169,41 @@ public nonisolated final class EnvironmentMap: @unchecked Sendable {
                             bytesPerRow: bytesPerRow,
                             bytesPerImage: bytesPerRow * size)
         }
+    }
+
+    /// A `Float` as the bits of a half float, for an `.rgba16Float` texture.
+    ///
+    /// **Bits, not `Float16`, so the engine compiles for Intel (2026-10-14).** Swift has no `Float16` on Intel
+    /// Macs, and an App Store archive builds for both architectures: an editor's failed outright here, while every
+    /// Debug build — this Mac's architecture only — had passed. Metal 4 needs Apple silicon, so Intel never runs
+    /// this; it only has to compile. On Apple silicon it is `Float16` exactly as before, so every frame is
+    /// unchanged; on Intel it is the same round-to-nearest-even, written out.
+    @inline(__always)
+    static func halfBits(_ value: Float) -> UInt16 {
+        #if arch(arm64)
+        return Float16(value).bitPattern
+        #else
+        let bits = value.bitPattern
+        let sign = UInt16((bits >> 16) & 0x8000)
+        let magnitude = bits & 0x7FFF_FFFF
+        if magnitude > 0x7F80_0000 { return sign | 0x7E00 }               // NaN
+        let exponent = Int(magnitude >> 23) - 127 + 15
+        var mantissa = magnitude & 0x7F_FFFF
+        if exponent >= 31 { return sign | 0x7C00 }                          // too large: infinity
+        if exponent <= 0 {                                                  // subnormal, or zero
+            if exponent < -10 { return sign }
+            mantissa |= 0x80_0000
+            let shift = UInt32(14 - exponent)
+            var half = mantissa >> shift
+            let rest = mantissa & ((1 << shift) - 1), halfway = UInt32(1) << (shift - 1)
+            if rest > halfway || (rest == halfway && half & 1 == 1) { half += 1 }
+            return sign | UInt16(half)
+        }
+        var half = UInt32(exponent) << 10 | mantissa >> 13
+        let rest = mantissa & 0x1FFF
+        if rest > 0x1000 || (rest == 0x1000 && half & 1 == 1) { half += 1 } // a carry into the exponent is right
+        return sign | UInt16(half)
+        #endif
     }
 
     /// How many samples a mip's convolution gets. **Quadrupling per mip, and this is not a tuning

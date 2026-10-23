@@ -30,10 +30,12 @@ public enum MeshLoaderError: Error, CustomStringConvertible, Sendable {
 
 /// Loads geometry from disk.
 ///
-/// **This is the piece an engine would have given us.** With no importer, the format choice is a
-/// real constraint rather than a preference: Model I/O reads USD, USDZ, OBJ, PLY, STL and Alembic
-/// natively, and anything outside that list — FBX above all — becomes a parser this project owns.
-/// Prefer USD for anything with materials or hierarchy; OBJ is fine for placeholder geometry.
+/// **This is the piece an engine would have given us.** Model I/O reads USD, USDZ, OBJ, PLY, STL and
+/// Alembic natively; **glTF and GLB are read by the engine's own reader** (``ImportedModel/read(gltf:reportingTo:)``)
+/// and handed to Model I/O as an asset built in memory, so everything after the read — tangents, the vertex
+/// layout, bounds, materials — is the same path for every format. **FBX is not read**: the only complete reader
+/// is Autodesk's SDK, which a public source repository cannot carry. Prefer USD or glTF for anything with
+/// materials or hierarchy; OBJ is fine for placeholder geometry.
 public nonisolated enum MeshLoader {
 
     /// Loads every mesh in a file, laid out to match the render pipeline's vertex descriptor.
@@ -45,7 +47,7 @@ public nonisolated enum MeshLoader {
     ///   `[0: MDLVertexAttributePosition, 1: MDLVertexAttributeTextureCoordinate]`. The game owns
     ///   these indices, because they are a contract between its shaders and its vertex descriptor —
     ///   the engine has no business guessing them.
-    /// - Parameter fileExtension: the file's extension, without the dot — `"usda"`, `"usdz"`, `"obj"`.
+    /// - Parameter fileExtension: the file's extension, without the dot — `"usda"`, `"usdz"`, `"glb"`, `"obj"`.
     ///   No default: the extension is the format, and USD is preferred over OBJ, so it is named.
     public static func load(
         named name: String,
@@ -77,19 +79,7 @@ public nonisolated enum MeshLoader {
         reportingTo report: ((String) -> Void)? = nil
     ) throws -> [LoadedMesh] {
         let name = url.lastPathComponent
-
-        let modelDescriptor = MTKModelIOVertexDescriptorFromMetal(vertexDescriptor)
-
-        // Model I/O needs the attributes *named*, not merely positioned. Without this it cannot
-        // tell which incoming attribute is a position and which is a normal, and the conversion
-        // silently produces zeroes — which renders as an unlit black scene, with nothing thrown and
-        // nothing logged. Naming every attribute the descriptor declares is not optional.
-        guard let attributes = modelDescriptor.attributes as? [MDLVertexAttribute] else {
-            throw MeshLoaderError.unusableVertexDescriptor(name)
-        }
-        for (index, semantic) in semantics {
-            attributes[index].name = semantic
-        }
+        let modelDescriptor = try namedDescriptor(vertexDescriptor, semantics: semantics, file: name)
 
         // **Said here, rather than as "no meshes".** Model I/O opens a file that is not there as an empty
         // asset, and an empty asset is indistinguishable from a file with nothing in it.
@@ -97,8 +87,18 @@ public nonisolated enum MeshLoader {
             throw MeshLoaderError.assetNotFound(url.path)
         }
 
-        let allocator = MTKMeshBufferAllocator(device: device)
+        if ImportedModel.gltfFileExtensions.contains(url.pathExtension.lowercased()) {
+            let model: ImportedModel
+            do {
+                model = try ImportedModel.read(gltf: url, reportingTo: report)
+            } catch {
+                throw MeshLoaderError.conversionFailed(name, underlying: error)
+            }
+            return try load(model: model, named: name, device: device, vertexDescriptor: vertexDescriptor,
+                            semantics: semantics, reportingTo: report)
+        }
 
+        let allocator = MTKMeshBufferAllocator(device: device)
         // **Loaded without the descriptor, then given it.** Handing the descriptor to `MDLAsset` at
         // load converts the file to that layout immediately — and a tangent attribute the file does
         // not have is filled with zeroes, which is a degenerate basis rather than a missing one.
@@ -106,7 +106,71 @@ public nonisolated enum MeshLoader {
         // applied afterwards.
         let asset = MDLAsset(url: url, vertexDescriptor: nil, bufferAllocator: allocator)
         asset.loadTextures()
+        return try meshes(in: asset, imported: [:], named: name, device: device, modelDescriptor: modelDescriptor,
+                          semantics: semantics, reportingTo: report)
+    }
 
+    /// The same, from a model already read — by the engine's glTF reader, or by a game's or a tool's own reader
+    /// of a format the engine does not read.
+    ///
+    /// **The model is handed to Model I/O as an asset built in memory**, so everything after it — tangents, the
+    /// layout, bounds, materials — is the path every file takes. See ``ImportedModel`` for the conventions a
+    /// reader must meet; what ``Material`` cannot carry (alpha mode, double-sidedness and the rest) stays in the
+    /// model.
+    /// - Parameter name: what errors and reports call it — the file it came from, usually.
+    public static func load(
+        model: ImportedModel,
+        named name: String,
+        device: MTLDevice,
+        vertexDescriptor: MTLVertexDescriptor,
+        semantics: [Int: String],
+        reportingTo report: ((String) -> Void)? = nil
+    ) throws -> [LoadedMesh] {
+        let modelDescriptor = try namedDescriptor(vertexDescriptor, semantics: semantics, file: name)
+        let allocator = MTKMeshBufferAllocator(device: device)
+        let (asset, imported) = makeAsset(model, allocator: allocator, reportingTo: report)
+        return try meshes(in: asset, imported: imported, named: name, device: device,
+                          modelDescriptor: modelDescriptor, semantics: semantics, reportingTo: report)
+    }
+
+    /// A file as an ``ImportedModel``, without drawing it — for a tool that wants what the file holds: its
+    /// materials whole, its images' own bytes, or a model to write out again in another format.
+    ///
+    /// **glTF and GLB**, read by ``ImportedModel/read(gltf:reportingTo:)``. Formats Model I/O reads are not
+    /// offered here: going through Model I/O would lose what this exists to keep, its exporter dropping every
+    /// texture.
+    /// - Throws: ``GLTFError`` — `unreadable` for a file that is not glTF at all.
+    public static func model(url: URL, reportingTo report: ((String) -> Void)? = nil) throws -> ImportedModel {
+        guard ImportedModel.gltfFileExtensions.contains(url.pathExtension.lowercased()) else {
+            throw GLTFError.unreadable(file: url.lastPathComponent)
+        }
+        return try ImportedModel.read(gltf: url, reportingTo: report)
+    }
+
+    /// The game's vertex descriptor as Model I/O's, every attribute named by its semantic.
+    ///
+    /// Model I/O needs the attributes *named*, not merely positioned. Without this it cannot
+    /// tell which incoming attribute is a position and which is a normal, and the conversion
+    /// silently produces zeroes — which renders as an unlit black scene, with nothing thrown and
+    /// nothing logged. Naming every attribute the descriptor declares is not optional.
+    private static func namedDescriptor(_ vertexDescriptor: MTLVertexDescriptor, semantics: [Int: String],
+                                        file name: String) throws -> MDLVertexDescriptor {
+        let modelDescriptor = MTKModelIOVertexDescriptorFromMetal(vertexDescriptor)
+        guard let attributes = modelDescriptor.attributes as? [MDLVertexAttribute] else {
+            throw MeshLoaderError.unusableVertexDescriptor(name)
+        }
+        for (index, semantic) in semantics {
+            attributes[index].name = semantic
+        }
+        return modelDescriptor
+    }
+
+    /// Every mesh in an asset as a ``LoadedMesh``: tangents if wanted, then the game's layout, then Metal.
+    /// - Parameter imported: per Model I/O mesh, the materials it came from when it was built from an
+    ///   ``ImportedModel``, for the factors Model I/O cannot carry.
+    private static func meshes(in asset: MDLAsset, imported: [ObjectIdentifier: [ImportedMaterial?]],
+                               named name: String, device: MTLDevice, modelDescriptor: MDLVertexDescriptor,
+                               semantics: [Int: String], reportingTo report: ((String) -> Void)?) throws -> [LoadedMesh] {
         let wantsTangents = semantics.values.contains(MDLVertexAttributeTangent)
         for mesh in allMeshes(in: asset) {
             if wantsTangents { addTangentsIfNeeded(to: mesh, named: name, reportingTo: report) }
@@ -128,11 +192,12 @@ public nonisolated enum MeshLoader {
         // GPU memory back.
         return zip(metalMeshes, modelMeshes).map { metal, model in
             let box = model.boundingBox
+            let read = materials(of: model, count: metal.submeshes.count)
             return LoadedMesh(
                 mesh: metal,
                 bounds: BoundingBox(minimum: SIMD3(box.minBounds.x, box.minBounds.y, box.minBounds.z),
                                     maximum: SIMD3(box.maxBounds.x, box.maxBounds.y, box.maxBounds.z)),
-                materials: materials(of: model, count: metal.submeshes.count),
+                materials: imported[ObjectIdentifier(model)].map { withFactors(read, from: $0) } ?? read,
                 nodeTransform: transforms[ObjectIdentifier(model)] ?? matrix_identity_float4x4)
         }
     }

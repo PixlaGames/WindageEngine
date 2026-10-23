@@ -20,9 +20,42 @@ let package = Package(
             name: "MeshOptimizer",
             exclude: ["LICENSE.md"]
         ),
+        // Google's Draco decoder, for glTF's KHR_draco_mesh_compression: C++, vendored unmodified from the 1.5.7
+        // release (Apache 2.0, LICENSE beside it), behind a small C interface of the engine's own (`WEDraco`).
+        // The reference decoder is what every serious glTF reader uses; a reimplementation would be months of
+        // work and less trustworthy. `draco_features.h` is written here in place of the one Draco's CMake makes.
+        .target(
+            name: "Draco",
+            exclude: ["LICENSE"],
+            // **Silenced by name, and through the safe setting rather than a compiler flag.** Xcode warns about
+            // 64-to-32-bit conversions that Draco's own build does not, and the code is Google's, unmodified.
+            // `unsafeFlags` would do the same and make the package unusable by URL: SwiftPM refuses a dependency
+            // fetched from a repository if any target in it uses them.
+            cxxSettings: [.headerSearchPath("src"), .disableWarning("shorten-64-to-32")]
+        ),
+        // Binomial's Basis Universal transcoder, for glTF's KHR_texture_basisu (KTX2 textures): C++, vendored
+        // unmodified from the 2.50 release with Meta's Zstandard decoder beside it (Apache 2.0 and BSD — LICENSE,
+        // NOTICE and LICENSES/), behind a small C interface of the engine's own (`WEBasis`). The same decision as
+        // Draco's. The excluded files are included by the transcoder's source rather than compiled on their own.
+        .target(
+            name: "Basis",
+            exclude: ["LICENSE", "NOTICE", "LICENSES", "src/transcoder/basisu_astc_cfgs.inl",
+                      "src/transcoder/basisu_dds_transcoder.inl", "src/transcoder/basisu_etc1_mods.inl",
+                      "src/transcoder/basisu_xbc7_decoder.inl", "src/transcoder/basisu_transcoder_tables_astc.inc",
+                      "src/transcoder/basisu_transcoder_tables_astc_0_255.inc",
+                      "src/transcoder/basisu_transcoder_tables_atc_55.inc", "src/transcoder/basisu_transcoder_tables_atc_56.inc",
+                      "src/transcoder/basisu_transcoder_tables_bc7_m5_alpha.inc",
+                      "src/transcoder/basisu_transcoder_tables_bc7_m5_color.inc",
+                      "src/transcoder/basisu_transcoder_tables_dxt1_5.inc", "src/transcoder/basisu_transcoder_tables_dxt1_6.inc",
+                      "src/transcoder/basisu_transcoder_tables_pvrtc2_45.inc",
+                      "src/transcoder/basisu_transcoder_tables_pvrtc2_alpha_33.inc"],
+            cSettings: [.define("BASISD_SUPPORT_KTX2", to: "1"), .define("BASISD_SUPPORT_KTX2_ZSTD", to: "1")],
+            cxxSettings: [.headerSearchPath("src"), .define("BASISD_SUPPORT_KTX2", to: "1"),
+                          .define("BASISD_SUPPORT_KTX2_ZSTD", to: "1")]
+        ),
         .target(
             name: "WindageEngine",
-            dependencies: ["MeshOptimizer"],
+            dependencies: ["MeshOptimizer", "Draco", "Basis"],
             // Declared so SwiftPM synthesises `Bundle.module`, which the HUD and tone-map pipelines
             // load their shaders from. Xcode compiles the .metal into the same bundle as `default.metallib`;
             // SwiftPM's CLI does not compile Metal at all, which is why `swift test` can build the
@@ -76,5 +109,7 @@ let package = Package(
             // do — see their doc comments.
             resources: [.process("Resources")]
         )
-    ]
+    ],
+    // Draco and Basis Universal are C++17; meshoptimizer is happy with anything since C++98.
+    cxxLanguageStandard: .cxx17
 )

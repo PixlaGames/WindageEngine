@@ -262,8 +262,20 @@ nonisolated extension MDLMaterialProperty {
     /// same file is `.string` before `MDLAsset.loadTextures()` is called and `.texture` after it, so
     /// a loader matching on `.texture` works or fails depending on an unrelated call somewhere else.
     /// Having a URL is the thing that actually means "this is a map".
+    ///
+    /// **A texture packed in a `.usdz` is the package's URL with the entry as its fragment** (2026-10-22). Model I/O
+    /// names it `Prop.usdz[textures/x.png]` in `stringValue` while `urlValue` is the package itself, which no image
+    /// loader can open — so the texture drew white. The entry rides along as the fragment, which keeps
+    /// ``TextureSource`` the two cases it was, and ``TextureStore`` reads it out of the package.
     var textureSource: TextureSource? {
         guard let url = urlValue, type == .texture || type == .URL || type == .string else { return nil }
+        if url.pathExtension.lowercased() == "usdz", let name = stringValue, name.hasSuffix("]"),
+           let open = name.range(of: ".usdz[", options: [.caseInsensitive, .backwards]) {
+            let entry = String(name[open.upperBound..<name.index(before: name.endIndex)])
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            components?.fragment = entry
+            if let packed = components?.url { return .url(packed) }
+        }
         return .url(url)
     }
 }

@@ -19,7 +19,7 @@ Add the package to your game's `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/PixlaGames/WindageEngine.git", from: "1.0.0")
+    .package(url: "https://github.com/PixlaGames/WindageEngine.git", from: "1.1.0")
 ],
 targets: [
     .executableTarget(name: "MyGame", dependencies: ["WindageEngine"])
@@ -44,7 +44,7 @@ swift run WindageSample
 - **Frame pacing** — frames in flight, a fixed simulation step, interpolation between steps
 - **Rendering** — reversed-Z depth, HDR with tone mapping, physically based materials, image-based lighting
 - **Light and shadow** — cascaded sun shadows; spot and point lights, clustered, each able to cast
-- **Meshes** — USD and OBJ through Model I/O, with USD's orientation and units handled
+- **Meshes** — USD through Model I/O, and glTF / GLB with meshopt, Draco and KTX2 compression
 - **Many copies** — instanced drawing, frustum culling and automatic level of detail
 - **Characters** — skinned animation from USD, cross-fades, attachments, and a character controller
 - **Input** — keyboard, mouse and game controllers, with rebindable actions
@@ -74,5 +74,7 @@ and ships the licenses of the third-party code compiled into it:
 | Component | License | In |
 |---|---|---|
 | meshoptimizer | MIT | `Sources/MeshOptimizer` |
+| Draco | Apache 2.0 | `Sources/Draco` |
+| Basis Universal, with Zstandard | Apache 2.0, BSD | `Sources/Basis` |
 
 © 2026 Pixla LLC
