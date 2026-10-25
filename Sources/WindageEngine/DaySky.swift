@@ -16,10 +16,21 @@ public nonisolated struct DaySky: Sendable, Equatable {
     /// **The sun set by hand** instead of by the hour — for matching a scene's lighting to something else. `nil` is the
     /// normal case. The sky's colours still follow the sun's height, so a low sun set by hand still gets a dusk sky.
     public var sun: Sun?
+    /// **How thick the air is**: exponential-squared distance fog toward ``Lighting/horizon``, so far things sink into
+    /// the sky drawn behind them — a point `d` metres away is `1 − exp(−(fogDensity · d)²)` fog. 0 is none; 0.008 has
+    /// half of a thing gone at about 100 m and nearly all of it by 250. Per sky, because a world decides its own air.
+    public var fogDensity: Float
 
-    public init(timeOfDay: Float = 15, sun: Sun? = nil) {
+    public init(timeOfDay: Float = 15, sun: Sun? = nil, fogDensity: Float = 0) {
         self.timeOfDay = timeOfDay
         self.sun = sun
+        self.fogDensity = fogDensity
+    }
+
+    /// How much fog lies between the eye and a point this far away, 0…1 (``fogDensity``).
+    public func fog(atDistance distance: Float) -> Float {
+        let density = fogDensity * distance
+        return 1 - exp(-density * density)
     }
 
     /// A sun placed by hand.

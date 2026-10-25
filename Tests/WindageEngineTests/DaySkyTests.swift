@@ -58,6 +58,14 @@ struct DaySkyTests {
         #expect(light.elevation > 0.5)
     }
 
+    @Test("Fog is none by default, half at about 104 m at 0.008, and grows with distance")
+    func fog() {
+        #expect(DaySky().fog(atDistance: 500) == 0)
+        let sky = DaySky(fogDensity: 0.008)
+        #expect(abs(sky.fog(atDistance: 104) - 0.5) < 0.01)
+        #expect(sky.fog(atDistance: 50) < sky.fog(atDistance: 100) && sky.fog(atDistance: 250) > 0.95)
+    }
+
     /// The sky drawn through a whole frame: blue-ish above the horizon, the ground's dark colour below.
     private final class SkyOnly: GameLoop {
         let pass: SkyPass
