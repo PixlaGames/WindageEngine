@@ -360,10 +360,15 @@ public final class FrameRenderer {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: FrameRenderer.depthPixelFormat, width: width, height: height, mipmapped: false)
         descriptor.usage = .renderTarget
-        // Nothing reads depth after the pass ends, so it never needs to exist in main memory. On
-        // Apple silicon a memoryless attachment lives only in tile memory: no allocation, no
-        // write-out, and nothing for the residency set to track.
-        descriptor.storageMode = .memoryless
+        // **Private, not memoryless** (2026-10-25). Nothing reads depth after the pass, so memoryless — tile memory
+        // only, nothing allocated — looked free. It is not, for a scene of unbounded size: when a pass submits more
+        // geometry than the GPU's tiling memory holds, the GPU renders partially, storing every attachment to memory
+        // and carrying on, and a memoryless attachment cannot be stored. The pass fails with no API error and the frame
+        // comes out black. Found with a dense zone of 48,000 scattered copies, black only in a large window and only in a
+        // band of distances where the most full-detail geometry was in view. The store action stays `.dontCare`, so a
+        // pass that fits in tile memory still writes nothing out; the cost is the allocation.
+        descriptor.storageMode = .private
+        let previousDepth = depthTexture
         depthTexture = device.makeTexture(descriptor: descriptor)
         depthTexture?.label = "Depth"
 
@@ -382,7 +387,9 @@ public final class FrameRenderer {
         // residency set that only ever grows holds every intermediate size resident for the life of
         // the process.
         if let previous { residencySet.removeAllocations([previous]) }
+        if let previousDepth { residencySet.removeAllocations([previousDepth]) }
         if let sceneTexture { residencySet.addAllocations([sceneTexture]) }
+        if let depthTexture { residencySet.addAllocations([depthTexture]) }
         residencySet.commit()
 
         game?.viewportSizeChanged(width: width, height: height)
