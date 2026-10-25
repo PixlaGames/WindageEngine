@@ -60,7 +60,7 @@ let package = Package(
             // load their shaders from. Xcode compiles the .metal into the same bundle as `default.metallib`;
             // SwiftPM's CLI does not compile Metal at all, which is why `swift test` can build the
             // package but cannot exercise anything needing a GPU.
-            resources: [.copy("HUDShaders.metal"), .copy("ToneMapShaders.metal"),
+            resources: [.copy("HUDShaders.metal"), .copy("ToneMapShaders.metal"), .copy("SkyShaders.metal"),
                         .copy("ParticleShaders.metal")],
             swiftSettings: [
                 // Matches the game targets: everything is main-actor by default unless it says
