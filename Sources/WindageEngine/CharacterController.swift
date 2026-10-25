@@ -61,6 +61,15 @@ public nonisolated struct CharacterController: Sendable {
         /// index (``CharacterController/groundSolid``), and a solid that moved under it is the one at
         /// that index.
         public var solids: [Solid]
+        /// **Things stood on and walked into as their own triangles** — a cave's floor, walls and roof, a bridge's
+        /// deck — rather than as boxes. Nil for none.
+        ///
+        /// A floor counts when it is no more than a step above the feet and wide enough to stand on
+        /// (``CollisionMesh/standingFloor(x:z:below:)``); a steep triangle reaching into the body above a step is a
+        /// wall the body is pushed out of and slides along; and a head stops at the surface over it. **The ground
+        /// still counts underneath**: a cave goes down through a gap in it, where ``groundHeight`` answers lower
+        /// than the cave's floor.
+        public var meshes: CollisionMesh?
 
         /// A box that can be stood on or walked into — where it is, where it really stands on the
         /// ground plane, and how it moved this step.
@@ -199,9 +208,10 @@ public nonisolated struct CharacterController: Sendable {
         }
 
         public init(groundHeight: @escaping @Sendable (Float, Float) -> Float = { _, _ in 0 },
-                    solids: [Solid] = []) {
+                    solids: [Solid] = [], meshes: CollisionMesh? = nil) {
             self.groundHeight = groundHeight
             self.solids = solids
+            self.meshes = meshes
         }
     }
 
@@ -724,6 +734,7 @@ public nonisolated struct CharacterController: Sendable {
         let before = SIMD2(feet.x, feet.z)
         move(along: SIMD3(travel.x, 0, 0), in: world)
         move(along: SIMD3(0, 0, travel.y), in: world)
+        if let meshes = world.meshes { leaveMeshWalls(meshes, cameFrom: before) }
 
         // --- Up and down.
         stepVertically(jumpHeld: isJumpHeld, deltaTime: dt, in: world)
@@ -1132,6 +1143,19 @@ public nonisolated struct CharacterController: Sendable {
 
     // MARK: - Up and down
 
+    /// **Out of every mesh wall the step went into**, sliding along it — and not into a gentle surface that rises
+    /// through the body, which is neither a wall nor a floor: that step is taken back, unless the body was already
+    /// inside one, when any move is allowed so it can walk out.
+    private mutating func leaveMeshWalls(_ meshes: CollisionMesh, cameFrom before: SIMD2<Float>) {
+        let height = tuning.bodyHeight(for: eyeHeight)
+        feet = meshes.pushOut(feet, radius: tuning.radius, height: height, stepHeight: tuning.stepHeight)
+        if meshes.surfaceThroughBody(feet, height: height, stepHeight: tuning.stepHeight),
+           !meshes.surfaceThroughBody(SIMD3(before.x, feet.y, before.y), height: height, stepHeight: tuning.stepHeight) {
+            feet.x = before.x
+            feet.z = before.y
+        }
+    }
+
     private mutating func stepVertically(jumpHeld: Bool, deltaTime dt: Float, in world: Surroundings) {
         // A jump is a *press*, remembered briefly so one pressed just before landing still counts.
         if jumpHeld && !wasJumpHeld { jumpBufferLeft = tuning.jumpBufferTime }
@@ -1230,14 +1254,24 @@ public nonisolated struct CharacterController: Sendable {
 
     /// The highest surface under the footprint whose top is no higher than `limit`.
     ///
-    /// **Terrain always counts**, whatever the limit — it is the floor, and nothing goes below it.
-    /// Solids count only if they are low enough to be under the feet rather than in front of them.
+    /// **Terrain always counts**, whatever the limit — it is the floor, and nothing goes below it — **except over the
+    /// head with a mesh floor underfoot**, which is a cave under it. Solids count only if they are low enough to be
+    /// under the feet rather than in front of them.
     ///
     /// Returns which solid it was, too — nil when the terrain is highest.
     private func supportHeight(at position: SIMD3<Float>, below limit: Float,
                                in world: Surroundings) -> (height: Float, solid: Int?) {
         var highest = world.groundHeight(position.x, position.z)
         var which: Int?
+        if let floor = world.meshes?.standingFloor(x: position.x, z: position.z,
+                                                   below: limit + CharacterController.contactTolerance) {
+            // **Under the ground, in a cave, the ground is not the floor**: a cave runs on under the ground past the gap
+            // it was entered by, and the ground there is over the head. Counting it — the rule everywhere else — lifted
+            // a body walking out from under the gap straight up through the roof. Ground between the feet and the head
+            // still counts: that is a bank to climb, not a roof.
+            if highest > position.y + tuning.bodyHeight(for: eyeHeight) { highest = floor }
+            else if floor > highest { highest = floor }
+        }
         let at = SIMD2(position.x, position.z)
         for (index, solid) in world.solids.enumerated()
         where solid.bounds.maximum.y <= limit + CharacterController.contactTolerance
@@ -1254,7 +1288,8 @@ public nonisolated struct CharacterController: Sendable {
                                in world: Surroundings) -> Float? {
         let head = position.y + tuning.bodyHeight(for: eyeHeight)
         let at = SIMD2(position.x, position.z)
-        var lowest: Float?
+        var lowest = world.meshes?.ceiling(x: position.x, z: position.z,
+                                           above: head - CharacterController.contactTolerance, below: top)
         for (index, solid) in world.solids.enumerated()
         where solid.bounds.minimum.y >= head - CharacterController.contactTolerance && solid.bounds.minimum.y < top
             && depth(at: at, into: plan(of: index, in: world)) > 0 {
