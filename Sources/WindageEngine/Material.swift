@@ -113,6 +113,16 @@ public nonisolated struct Material: Sendable, Equatable {
     /// format that speaks in exponents rather than in roughness** — see ``init(_:name:)``.
     public var specularExponent: Float?
 
+    /// **Where alpha cuts the surface out**, or nil for a surface drawn solid. A pixel whose base colour
+    /// alpha falls below it is not drawn — and casts no shadow — which is how a leaf card is a leaf and not
+    /// a square. Cut out, not blended: it needs no sorting, so it draws in the same pass as everything else.
+    ///
+    /// **From USD it is always 0.5, because Model I/O drops the threshold.** Measured: a
+    /// `UsdPreviewSurface` with `opacity` connected to its texture's alpha and `opacityThreshold = 0.5`
+    /// arrives with the opacity map and no threshold at all, at any value. So an opacity *map* is taken
+    /// as a cut-out at glTF's default; a plain opacity number stays in ``baseColor``'s alpha.
+    public var alphaCutoff: Float?
+
     /// **Defaults chosen so that a material nobody filled in still draws.** White, dielectric and
     /// fairly rough is a plausible painted surface; zeroes would be a black hole and 0 roughness a
     /// mirror, and both read as a bug in the renderer rather than a missing material.
@@ -122,7 +132,8 @@ public nonisolated struct Material: Sendable, Equatable {
                 roughness: Float = 0.65,
                 emissive: SIMD3<Float> = .zero,
                 textures: [TextureSlot: TextureSource] = [:],
-                specularExponent: Float? = nil) {
+                specularExponent: Float? = nil,
+                alphaCutoff: Float? = nil) {
         self.name = name
         self.baseColor = baseColor
         self.metallic = metallic
@@ -130,6 +141,7 @@ public nonisolated struct Material: Sendable, Equatable {
         self.emissive = emissive
         self.textures = textures
         self.specularExponent = specularExponent
+        self.alphaCutoff = alphaCutoff
     }
 }
 
@@ -204,8 +216,13 @@ nonisolated extension Material {
             }
         }
 
-        if let opacity = material.property(with: .opacity), opacity.type == .float {
+        let opacities = material.properties(with: .opacity)
+        if let opacity = opacities.first(where: { $0.type == .float }) {
             baseColor.w = opacity.floatValue
+        }
+        // An opacity map is a cut-out; its threshold did not survive the trip — see `alphaCutoff`.
+        if opacities.contains(where: { $0.textureSource != nil }) {
+            alphaCutoff = 0.5
         }
 
         // **An OBJ's roughness has to come from `Ns`, because Model I/O's roughness field is a

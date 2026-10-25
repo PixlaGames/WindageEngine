@@ -318,13 +318,20 @@ public final class ShadowMap {
     ///
     /// The game still supplies the vertex function and the vertex descriptor, which is exactly the
     /// part the engine cannot know.
+    ///
+    /// **A fragment function only for surfaces cut out by their texture's alpha** — leaves, grass, a chain-link
+    /// fence. Without one, every triangle casts solid and a leaf card casts a square. The function decides only
+    /// whether to discard; there is still no color attachment. It costs a texture read per shadow texel, so
+    /// solid surfaces keep the vertex-only pipeline. A batch drawn with it binds its own texture through the
+    /// encoder it is handed (``ShadowBatch/init(pipeline:encode:)``), on the fragment stage.
     public static func pipelineDescriptor(vertexFunction: MTL4LibraryFunctionDescriptor,
+                                          fragmentFunction: MTL4LibraryFunctionDescriptor? = nil,
                                           vertexDescriptor: MTLVertexDescriptor,
                                           label: String = "Shadow") -> MTL4RenderPipelineDescriptor {
         let descriptor = MTL4RenderPipelineDescriptor()
         descriptor.label = label
         descriptor.vertexFunctionDescriptor = vertexFunction
-        descriptor.fragmentFunctionDescriptor = nil
+        descriptor.fragmentFunctionDescriptor = fragmentFunction
         descriptor.vertexDescriptor = vertexDescriptor
         descriptor.rasterSampleCount = 1
         return descriptor

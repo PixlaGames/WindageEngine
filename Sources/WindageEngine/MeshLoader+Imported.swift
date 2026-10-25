@@ -188,6 +188,7 @@ nonisolated extension MeshLoader {
             restored.metallic = source.metallic
             restored.roughness = source.roughness
             restored.emissive = source.emissive
+            restored.alphaCutoff = source.alphaMode == .mask ? source.alphaCutoff : nil
             return restored
         }
     }

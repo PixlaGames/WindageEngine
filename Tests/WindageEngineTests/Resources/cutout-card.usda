@@ -1,0 +1,43 @@
+#usda 1.0
+(
+    defaultPrim = "Card"
+    upAxis = "Y"
+)
+def Xform "Card"
+{
+    def Mesh "Quad" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        uniform bool doubleSided = 1
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(0,0,0), (1,0,0), (1,1,0), (0,1,0)]
+        texCoord2f[] primvars:st = [(0,0), (1,0), (1,1), (0,1)] (interpolation = "vertex")
+        rel material:binding = </Card/Leaf>
+    }
+    def Material "Leaf"
+    {
+        token outputs:surface.connect = </Card/Leaf/Surface.outputs:surface>
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor.connect = </Card/Leaf/BaseColor.outputs:rgb>
+            float inputs:opacity.connect = </Card/Leaf/BaseColor.outputs:a>
+            float inputs:opacityThreshold = 0.5
+            token outputs:surface
+        }
+        def Shader "TexCoords"
+        {
+            uniform token info:id = "UsdPrimvarReader_float2"
+            string inputs:varname = "st"
+            float2 outputs:result
+        }
+        def Shader "BaseColor"
+        {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @material-map.png@
+            float2 inputs:st.connect = </Card/Leaf/TexCoords.outputs:result>
+            float outputs:a
+            float3 outputs:rgb
+        }
+    }
+}

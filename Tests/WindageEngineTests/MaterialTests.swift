@@ -14,8 +14,8 @@ struct MaterialTests {
 
     /// Reading a material's *numbers* needs no GPU — which is the whole reason `Material` is split
     /// from `TextureStore`, and why this suite exists at all.
-    private func loadMaterial() throws -> Material {
-        let url = try #require(Bundle.module.url(forResource: "textured-quad", withExtension: "usda"))
+    private func loadMaterial(_ resource: String = "textured-quad") throws -> Material {
+        let url = try #require(Bundle.module.url(forResource: resource, withExtension: "usda"))
         let asset = MDLAsset(url: url)
         var found: MDLMaterial?
         func descend(_ object: MDLObject) {
@@ -197,5 +197,28 @@ struct MaterialTests {
         #expect(MeshLoader.materials(of: one, count: 1).count == 1)
         #expect(MeshLoader.materials(of: one, count: 4).count == 4)
         #expect(MeshLoader.materials(of: one, count: 0).isEmpty)
+    }
+
+    @Test("An opacity map makes a cut-out, though Model I/O drops the threshold")
+    func opacityMapCutsOut() throws {
+        let card = try loadMaterial("cutout-card")
+        #expect(card.alphaCutoff == 0.5)
+        #expect(card.textures[.baseColor] != nil)
+    }
+
+    @Test("A surface with no opacity map draws solid")
+    func solidSurfaceHasNoCutoff() throws {
+        #expect(try loadMaterial().alphaCutoff == nil)
+        #expect(Material().alphaCutoff == nil)
+    }
+
+    @Test("An imported mask keeps its own cutoff, and a blend is not a cut-out")
+    func importedMaskKeepsItsCutoff() {
+        let masked = ImportedMaterial(name: "Leaf", alphaMode: .mask, alphaCutoff: 0.3)
+        let blended = ImportedMaterial(name: "Glass", alphaMode: .blend)
+        let restored = MeshLoader.withFactors([Material(), Material(), Material()], from: [masked, blended, nil])
+        #expect(restored[0].alphaCutoff == 0.3)
+        #expect(restored[1].alphaCutoff == nil)
+        #expect(restored[2].alphaCutoff == nil)
     }
 }
