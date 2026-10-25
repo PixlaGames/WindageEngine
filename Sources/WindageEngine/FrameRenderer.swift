@@ -335,6 +335,20 @@ public final class FrameRenderer {
     /// - Parameter frameRateRange: what to ask the display for. The default, 30 to 120 preferring 120,
     ///   suits a game that wants every frame a ProMotion display offers; a game holding a steady 60
     ///   asks for that instead. The simulation's rate is not this — see ``FixedTimestep``.
+    /// **Prepares a layer for the engine to draw into** — its device, ``colorPixelFormat``, and **not framebuffer-only**.
+    /// Call it on every layer, including the one an `MTKView` makes for itself.
+    ///
+    /// **Framebuffer-only lets macOS keep a window's frames compressed, and after the window has been in and out of
+    /// full screen some of them reached the screen as garbage**: tiles of magenta and noise, or blocks of the frame
+    /// before, for up to fifteen seconds at a time, worse the more detailed the picture. Measured with the window
+    /// captured from outside, twenty trips each way: 131 corrupt frames framebuffer-only, none without; a scene that drew
+    /// nothing showed none either way. Turning it off cost about one frame a second in 55 (2026-10-25).
+    public static func prepare(_ layer: CAMetalLayer, device: MTLDevice) {
+        layer.device = device
+        layer.pixelFormat = colorPixelFormat
+        layer.framebufferOnly = false
+    }
+
     public func makeDisplayLink(
         for layer: CAMetalLayer,
         frameRateRange: CAFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 120)
