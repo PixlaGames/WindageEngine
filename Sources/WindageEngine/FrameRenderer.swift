@@ -133,6 +133,20 @@ public final class FrameRenderer {
 
     /// The exposure and curve applied between the scene and the display. Change it whenever.
     public var toneMapping = ToneMapping.default
+    /// How large the scene is drawn against the drawable; ``SceneScaling/native`` unless a game asks. Change it
+    /// whenever — the targets follow on the next frame.
+    public var sceneScaling = SceneScaling.native
+    /// The size the scene is drawn at, in pixels: the drawable's, unless ``sceneScaling`` draws it smaller.
+    public private(set) var sceneSize = (width: 0, height: 0)
+    private var drawableSize = (width: 0, height: 0)
+    /// Targets replaced at a resize, kept until the last frame that drew into them has finished.
+    ///
+    /// **Released at once, they were still in use.** A Metal 4 command buffer does not keep what it uses alive, and
+    /// up to ``maxFramesInFlight`` − 1 frames may still be on the GPU when the size changes — so the old targets
+    /// were dropped from residency and freed under frames still drawing into them. Under Metal's validation that
+    /// paints them magenta; without it, it is undefined. Found in a game's own renderer making the same mistake,
+    /// as a magenta flash on leaving full screen (2026-10-25).
+    private var retiredTargets: [(textures: [MTLTexture], lastUsedBy: UInt64)] = []
 
     public weak var game: GameLoop?
 
@@ -353,9 +367,18 @@ public final class FrameRenderer {
         render(to: drawable, interpolation: timestep.interpolation)
     }
 
-    private func updateRenderTargets(width: Int, height: Int) {
-        guard width > 0, height > 0 else { return }
-        if let depthTexture, depthTexture.width == width, depthTexture.height == height { return }
+    private func updateRenderTargets(width drawableWidth: Int, height drawableHeight: Int) {
+        guard drawableWidth > 0, drawableHeight > 0 else { return }
+        releaseRetiredTargets()
+        let (width, height) = sceneScaling.sceneSize(drawableWidth: drawableWidth, drawableHeight: drawableHeight)
+        let drawableChanged = drawableSize != (drawableWidth, drawableHeight)
+        drawableSize = (drawableWidth, drawableHeight)
+        if let depthTexture, depthTexture.width == width, depthTexture.height == height {
+            // The same scene in a drawable of another size — both past the cap — still changes the aspect.
+            if drawableChanged { game?.viewportSizeChanged(width: drawableWidth, height: drawableHeight) }
+            return
+        }
+        sceneSize = (width, height)
 
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: FrameRenderer.depthPixelFormat, width: width, height: height, mipmapped: false)
@@ -383,16 +406,36 @@ public final class FrameRenderer {
         sceneTexture = device.makeTexture(descriptor: sceneDescriptor)
         sceneTexture?.label = "Scene Colour (HDR)"
 
-        // **Removed as well as added.** A window dragged between displays resizes repeatedly, and a
-        // residency set that only ever grows holds every intermediate size resident for the life of
-        // the process.
-        if let previous { residencySet.removeAllocations([previous]) }
-        if let previousDepth { residencySet.removeAllocations([previousDepth]) }
+        // **Removed as well as added** — a window dragged between displays resizes repeatedly, and a residency set
+        // that only ever grows holds every intermediate size resident for the life of the process — **but not yet**:
+        // frames still on the GPU are drawing into them (``retiredTargets``).
+        let replaced = [previous, previousDepth].compactMap { $0 }
+        if !replaced.isEmpty { retiredTargets.append((replaced, UInt64(max(frameIndex - 1, 0)))) }
         if let sceneTexture { residencySet.addAllocations([sceneTexture]) }
         if let depthTexture { residencySet.addAllocations([depthTexture]) }
         residencySet.commit()
 
-        game?.viewportSizeChanged(width: width, height: height)
+        game?.viewportSizeChanged(width: drawableWidth, height: drawableHeight)
+    }
+
+    /// Lets go of replaced targets once the GPU has finished every frame that used them.
+    private func releaseRetiredTargets() {
+        let finished = endFrameEvent.signaledValue
+        let done = retiredTargets.filter { $0.lastUsedBy <= finished }
+        guard !done.isEmpty else { return }
+        residencySet.removeAllocations(done.flatMap(\.textures))
+        residencySet.commit()
+        retiredTargets.removeAll { $0.lastUsedBy <= finished }
+    }
+
+    /// The depth pass's stencil, cleared each frame: the same texture as depth (``depthPixelFormat`` carries both).
+    private func stencilAttachment(_ depth: MTLTexture) -> MTLRenderPassStencilAttachmentDescriptor {
+        let stencil = MTLRenderPassStencilAttachmentDescriptor()
+        stencil.texture = depth
+        stencil.loadAction = .clear
+        stencil.clearStencil = 0
+        stencil.storeAction = .dontCare
+        return stencil
     }
 
     /// Pass two: the scene fitted to the display, then the interface on top of it.
@@ -423,6 +466,7 @@ public final class FrameRenderer {
             encoder.setRenderPipelineState(toneMapPipeline)
             encoder.setArgumentTable(toneMapArgumentTable, stages: [.vertex, .fragment])
             var uniforms = toneMapping.packed
+            uniforms.sceneScale = SIMD2(Float(scene.width) / Float(target.width), Float(scene.height) / Float(target.height))
             let offset = frameSlot * FrameRenderer.toneMapStride
             toneMapUniformBuffer.contents().advanced(by: offset)
                 .copyMemory(from: &uniforms, byteCount: MemoryLayout<ToneMapping.Packed>.size)
@@ -472,6 +516,7 @@ public final class FrameRenderer {
         depthAttachment.clearDepth = FrameRenderer.reversedZClearDepth
         depthAttachment.storeAction = .dontCare
         passDescriptor.depthAttachment = depthAttachment
+        passDescriptor.stencilAttachment = stencilAttachment(depthTexture)
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) else { return }
         encoder.label = "Scene, into a texture"
@@ -527,6 +572,7 @@ public final class FrameRenderer {
         depthAttachment.clearDepth = FrameRenderer.reversedZClearDepth
         depthAttachment.storeAction = .dontCare
         passDescriptor.depthAttachment = depthAttachment
+        passDescriptor.stencilAttachment = stencilAttachment(depthTexture)
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) else {
             fatalError("Failed to create render command encoder")

@@ -140,6 +140,8 @@ public nonisolated struct ToneMapping: Sendable, Equatable, Codable {
         var whitePoint: Float
         var curve: UInt32
         var padding: UInt32 = 0
+        /// Scene pixels per drawable pixel, each way: 1 when the scene is the drawable's size (``SceneScaling``).
+        var sceneScale = SIMD2<Float>(1, 1)
     }
 
     var packed: Packed {

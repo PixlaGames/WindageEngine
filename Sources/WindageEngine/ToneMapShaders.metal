@@ -15,6 +15,7 @@ struct ToneMapUniforms {
     float whitePoint;
     uint  curve;        // 0 clamp · 1 reinhard · 2 ACES — `ToneMapping.Curve.shaderValue`
     uint  padding;
+    float2 sceneScale;  // scene pixels per drawable pixel; 1 unless the scene is drawn smaller (`SceneScaling`)
 };
 
 struct ToneMapVertexOut {
@@ -50,13 +51,17 @@ static float3 aces(float3 x)
     return (x * (a * x + b)) / (x * (c * x + d) + e);
 }
 
-/// **Read, not sampled.** This pass is one-to-one with the drawable, so there is no filtering to do
-/// and no texture coordinate to get the wrong way up — `[[position]]` is already the pixel.
+/// **Read, not sampled, when the scene is the drawable's size.** One-to-one, there is no filtering to do and no
+/// texture coordinate to get the wrong way up — `[[position]]` is already the pixel. **Drawn smaller**
+/// (`SceneScaling`), the scene is sampled with linear filtering at the same place in its own, smaller, pixels.
 fragment float4 toneMapFragment(ToneMapVertexOut in [[stage_in]],
-                                texture2d<float, access::read> scene [[texture(0)]],
+                                texture2d<float, access::sample> scene [[texture(0)]],
                                 constant ToneMapUniforms &uniforms [[buffer(0)]])
 {
-    float3 colour = scene.read(uint2(in.position.xy)).rgb * uniforms.exposure;
+    constexpr sampler scaled(coord::pixel, filter::linear, address::clamp_to_edge);
+    const bool oneToOne = all(uniforms.sceneScale == float2(1.0));
+    float3 colour = (oneToOne ? scene.read(uint2(in.position.xy)).rgb
+                              : scene.sample(scaled, in.position.xy * uniforms.sceneScale).rgb) * uniforms.exposure;
 
     switch (uniforms.curve) {
         case 1: colour = reinhard(colour, uniforms.whitePoint); break;

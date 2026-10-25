@@ -112,7 +112,8 @@ struct ToneMappingTests {
     /// to agree about.
     @Test("The packed form is what the shader expects")
     func packedLayoutIsStable() {
-        #expect(MemoryLayout<ToneMapping.Packed>.size == 16)
+        #expect(MemoryLayout<ToneMapping.Packed>.size == 24)
+        #expect(MemoryLayout<ToneMapping.Packed>.offset(of: \.sceneScale) == 16)
         let packed = ToneMapping(curve: .reinhard, exposureStops: 1, whitePoint: 3).packed
         #expect(packed.exposure == 2)
         #expect(packed.whitePoint == 3)
