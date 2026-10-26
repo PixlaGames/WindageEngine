@@ -42,6 +42,15 @@ struct InstancingTests {
         for _ in 0..<5 { #expect(InstanceBatches(copies).batches.map(\.key) == first) }
     }
 
+    @Test func copiesAlreadyGroupedKeepTheirOrderAndRuns() {
+        let batches = InstanceBatches(transforms: [move(1), move(2), move(3)], runs: [(key: "pine", count: 2), (key: "rock", count: 1)])
+        #expect(batches.batches.map(\.key) == ["pine", "rock"])
+        #expect(batches.batches.map(\.start) == [0, 2])
+        #expect(batches.batches.map(\.count) == [2, 1])
+        #expect(batches.transforms.map { $0.columns.3.x } == [1, 2, 3])
+        #expect(InstanceBatches<String>(transforms: [], runs: []).isEmpty)
+    }
+
     @Test func nothingGivenIsEmpty() {
         let batches = InstanceBatches<String>([])
         #expect(batches.isEmpty && batches.batches.isEmpty)

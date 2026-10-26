@@ -60,6 +60,18 @@ public nonisolated struct InstanceBatches<Key: Hashable & Sendable>: Sendable {
         }
     }
 
+    /// Copies already grouped: `transforms` kind after kind, and each kind's count in the same order. For a caller
+    /// that sorts its copies itself — it skips the grouping above, which is a dictionary insert per copy.
+    public init(transforms: [simd_float4x4], runs: [(key: Key, count: Int)]) {
+        precondition(runs.reduce(0) { $0 + $1.count } == transforms.count, "runs must cover the transforms exactly")
+        self.transforms = transforms
+        var start = 0
+        for run in runs {
+            batches.append(Batch(key: run.key, start: start, count: run.count))
+            start += run.count
+        }
+    }
+
     public var isEmpty: Bool { transforms.isEmpty }
 }
 
