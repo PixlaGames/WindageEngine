@@ -47,6 +47,21 @@ struct ShadowMapTests {
         #expect(shadowMap.texture.usage.contains(.shaderRead))
     }
 
+    /// A view zooming out wants its far cascade to follow it; the texture is made once.
+    @Test("The splits can move between frames, and the matrices follow them")
+    func splitsCanChange() {
+        guard let shadowMap = makeShadowMap() else { return }
+        let texture = shadowMap.texture
+        let eye = SIMD3<Float>(0, 10, 0), forward = SIMD3<Float>(0, 0, -1), sun = simd_normalize(SIMD3<Float>(0.3, -1, 0.2))
+        let near = shadowMap.updateMatrices(frameSlot: 0, cameraPosition: eye, cameraForward: forward, sunDirection: sun)
+        shadowMap.cascades = ShadowCascades(splits: [8, 22, 55, 900], resolution: 256, lightDepthRange: 200)
+        let far = shadowMap.updateMatrices(frameSlot: 0, cameraPosition: eye, cameraForward: forward, sunDirection: sun)
+        #expect(shadowMap.texture === texture)
+        #expect(far[0] == near[0], "a cascade whose split did not move is the same")
+        #expect(far[3] != near[3])
+        #expect(far[3] == shadowMap.cascades.cascadeMatrices(cameraPosition: eye, cameraForward: forward, sunDirection: sun)[3])
+    }
+
     @Test("Everything the GPU reads is offered to the residency set")
     func allocationsIncludeTheTexture() {
         guard let shadowMap = makeShadowMap() else { return }

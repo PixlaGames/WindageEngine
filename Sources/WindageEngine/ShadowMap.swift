@@ -252,7 +252,16 @@ public final class ShadowMap {
     /// read again in a later pass, where a packed or stencil format would only cost bandwidth.
     public static let depthPixelFormat: MTLPixelFormat = .depth32Float
 
-    public let cascades: ShadowCascades
+    /// The cascade numbers. **They may change from one frame to the next** — a view that pulls back from a doorway to a
+    /// whole valley wants its far cascade to follow it out — **as long as the count and the resolution stay**: the
+    /// texture and the light matrices were made for those. Other numbers are only read by ``updateMatrices(frameSlot:cameraPosition:cameraForward:sunDirection:)``
+    /// and the bias, so the next frame simply uses them.
+    public var cascades: ShadowCascades {
+        didSet {
+            precondition(cascades.count == oldValue.count && cascades.resolution == oldValue.resolution,
+                         "a shadow map keeps its \(oldValue.count) cascades of \(oldValue.resolution) texels; make another for others")
+        }
+    }
     public let texture: MTLTexture
 
     private let depthState: MTLDepthStencilState
