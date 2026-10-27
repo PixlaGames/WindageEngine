@@ -136,6 +136,18 @@ public final class FrameRenderer {
     /// How large the scene is drawn against the drawable; ``SceneScaling/native`` unless a game asks. Change it
     /// whenever — the targets follow on the next frame.
     public var sceneScaling = SceneScaling.native
+    /// **Samples per pixel in the scene pass** — multisampled anti-aliasing when above 1. Change it whenever: the targets
+    /// follow on the next frame, and the scene is resolved into the one-sample target the tone map reads, so nothing
+    /// after the scene pass changes. **Every pipeline a game draws into the scene pass must be built with this
+    /// `rasterSampleCount`**, and rebuilt when it changes (``SkyPass`` takes it too). 1, the default, is no multisampling;
+    /// a count the device cannot do is treated as 1 (``supportsSampleCount(_:)``).
+    public var sampleCount = 1
+    /// Whether the scene can be drawn at this many samples per pixel on this device.
+    public func supportsSampleCount(_ count: Int) -> Bool {
+        count == 1 || device.supportsTextureSampleCount(count)
+    }
+    /// The sample count the targets are made with: ``sampleCount``, or 1 when the device cannot do it.
+    public var effectiveSampleCount: Int { supportsSampleCount(sampleCount) ? max(sampleCount, 1) : 1 }
     /// The size the scene is drawn at, in pixels: the drawable's, unless ``sceneScaling`` draws it smaller.
     public private(set) var sceneSize = (width: 0, height: 0)
     private var drawableSize = (width: 0, height: 0)
@@ -155,6 +167,8 @@ public final class FrameRenderer {
     private var frameIndex: Int
     private var depthTexture: MTLTexture?
     private var sceneTexture: MTLTexture?
+    /// The scene's multisampled colour, resolved into ``sceneTexture``; nil at one sample.
+    private var multisampleTexture: MTLTexture?
     private var toneMapPipeline: MTLRenderPipelineState?
     private let toneMapArgumentTable: MTL4ArgumentTable
     private let toneMapUniformBuffer: MTLBuffer
@@ -387,7 +401,8 @@ public final class FrameRenderer {
         let (width, height) = sceneScaling.sceneSize(drawableWidth: drawableWidth, drawableHeight: drawableHeight)
         let drawableChanged = drawableSize != (drawableWidth, drawableHeight)
         drawableSize = (drawableWidth, drawableHeight)
-        if let depthTexture, depthTexture.width == width, depthTexture.height == height {
+        let samples = effectiveSampleCount
+        if let depthTexture, depthTexture.width == width, depthTexture.height == height, depthTexture.sampleCount == samples {
             // The same scene in a drawable of another size — both past the cap — still changes the aspect.
             if drawableChanged { game?.viewportSizeChanged(width: drawableWidth, height: drawableHeight) }
             return
@@ -405,6 +420,10 @@ public final class FrameRenderer {
         // band of distances where the most full-detail geometry was in view. The store action stays `.dontCare`, so a
         // pass that fits in tile memory still writes nothing out; the cost is the allocation.
         descriptor.storageMode = .private
+        if samples > 1 {
+            descriptor.textureType = .type2DMultisample
+            descriptor.sampleCount = samples
+        }
         let previousDepth = depthTexture
         depthTexture = device.makeTexture(descriptor: descriptor)
         depthTexture?.label = "Depth"
@@ -420,13 +439,30 @@ public final class FrameRenderer {
         sceneTexture = device.makeTexture(descriptor: sceneDescriptor)
         sceneTexture?.label = "Scene Colour (HDR)"
 
+        // **Multisampled colour, resolved into the scene target at the end of the pass.** Private, not memoryless, for
+        // the reason depth is: a pass larger than the tiling memory is rendered partially, and must store what it has.
+        let previousMultisample = multisampleTexture
+        if samples > 1 {
+            let multisample = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: FrameRenderer.sceneColorPixelFormat, width: width, height: height, mipmapped: false)
+            multisample.textureType = .type2DMultisample
+            multisample.sampleCount = samples
+            multisample.usage = .renderTarget
+            multisample.storageMode = .private
+            multisampleTexture = device.makeTexture(descriptor: multisample)
+            multisampleTexture?.label = "Scene Colour (HDR, \(samples)× multisampled)"
+        } else {
+            multisampleTexture = nil
+        }
+
         // **Removed as well as added** — a window dragged between displays resizes repeatedly, and a residency set
         // that only ever grows holds every intermediate size resident for the life of the process — **but not yet**:
         // frames still on the GPU are drawing into them (``retiredTargets``).
-        let replaced = [previous, previousDepth].compactMap { $0 }
+        let replaced = [previous, previousDepth, previousMultisample].compactMap { $0 }
         if !replaced.isEmpty { retiredTargets.append((replaced, UInt64(max(frameIndex - 1, 0)))) }
         if let sceneTexture { residencySet.addAllocations([sceneTexture]) }
         if let depthTexture { residencySet.addAllocations([depthTexture]) }
+        if let multisampleTexture { residencySet.addAllocations([multisampleTexture]) }
         residencySet.commit()
 
         game?.viewportSizeChanged(width: drawableWidth, height: drawableHeight)
@@ -440,6 +476,21 @@ public final class FrameRenderer {
         residencySet.removeAllocations(done.flatMap(\.textures))
         residencySet.commit()
         retiredTargets.removeAll { $0.lastUsedBy <= finished }
+    }
+
+    /// The scene pass's colour: the scene target itself, or the multisampled target resolved into it.
+    private func sceneColourAttachment(_ pass: MTL4RenderPassDescriptor, scene: MTLTexture) {
+        let colour = pass.colorAttachments[0]!
+        colour.loadAction = .clear
+        colour.clearColor = clearColor
+        if let multisampleTexture {
+            colour.texture = multisampleTexture
+            colour.resolveTexture = scene
+            colour.storeAction = .multisampleResolve
+        } else {
+            colour.texture = scene
+            colour.storeAction = .store
+        }
     }
 
     /// The depth pass's stencil, cleared each frame: the same texture as depth (``depthPixelFormat`` carries both).
@@ -520,10 +571,7 @@ public final class FrameRenderer {
         game.encodePrePasses(into: commandBuffer, frameSlot: frameSlot, interpolation: interpolation)
 
         let passDescriptor = MTL4RenderPassDescriptor()
-        passDescriptor.colorAttachments[0].texture = sceneTexture
-        passDescriptor.colorAttachments[0].loadAction = .clear
-        passDescriptor.colorAttachments[0].clearColor = clearColor
-        passDescriptor.colorAttachments[0].storeAction = .store
+        sceneColourAttachment(passDescriptor, scene: sceneTexture)
         let depthAttachment = MTLRenderPassDepthAttachmentDescriptor()
         depthAttachment.texture = depthTexture
         depthAttachment.loadAction = .clear
@@ -573,10 +621,7 @@ public final class FrameRenderer {
         // **Pass one: the scene, into an HDR target.** Not into the drawable — see
         // `sceneColorPixelFormat`.
         let passDescriptor = MTL4RenderPassDescriptor()
-        passDescriptor.colorAttachments[0].texture = sceneTexture
-        passDescriptor.colorAttachments[0].loadAction = .clear
-        passDescriptor.colorAttachments[0].clearColor = clearColor
-        passDescriptor.colorAttachments[0].storeAction = .store
+        sceneColourAttachment(passDescriptor, scene: sceneTexture)
 
         // Built fresh rather than mutated in place: `depthAttachment` is a `copy` property, so
         // whether edits to the returned object stick is not something to rely on.

@@ -27,7 +27,9 @@ public final class SkyPass {
     /// Everything the GPU must be able to reach: add it to the renderer's residency set.
     public var allocations: [any MTLAllocation] { [uniforms] }
 
-    public init(device: MTLDevice) throws {
+    /// - Parameter sampleCount: the scene pass's samples per pixel (``FrameRenderer/sampleCount``); make another
+    ///   ``SkyPass`` when it changes.
+    public init(device: MTLDevice, sampleCount: Int = 1) throws {
         let library = try ShaderLibrary.make(device: device, bundle: .module, sourceNamed: "SkyShaders")
         let compiler = try device.makeCompiler(descriptor: MTL4CompilerDescriptor())
         let vertex = MTL4LibraryFunctionDescriptor()
@@ -41,6 +43,7 @@ public final class SkyPass {
         descriptor.vertexFunctionDescriptor = vertex
         descriptor.fragmentFunctionDescriptor = fragment
         descriptor.colorAttachments[0].pixelFormat = FrameRenderer.sceneColorPixelFormat
+        descriptor.rasterSampleCount = max(sampleCount, 1)
         pipeline = try compiler.makeRenderPipelineState(descriptor: descriptor)
 
         let depth = MTLDepthStencilDescriptor()

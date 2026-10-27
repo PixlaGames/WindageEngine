@@ -106,4 +106,36 @@ struct DaySkyTests {
         #expect(Int(above[0]) > Int(above[2]), "above the horizon is bluer than red: \(above)")
         #expect(Int(above[0]) > Int(below[0]) + 40, "the ground below is darker: above \(above), below \(below)")
     }
+
+    /// **Multisampled, the same sky** (2026-10-26): the scene drawn at four samples a pixel and resolved into the target
+    /// the tone map reads. The sky has no edges to smooth, so it comes out as it does at one sample — which proves the
+    /// targets, the resolve and a pipeline built for the count all fit together.
+    @Test("At four samples a pixel the scene is drawn, resolved and shown as at one")
+    @MainActor
+    func multisampledIsTheSame() throws {
+        guard let device = MTLCreateSystemDefaultDevice(), device.supportsFamily(.metal4) else { return }
+        func draw(samples: Int) throws -> [UInt8] {
+            let renderer = try FrameRenderer(device: device)
+            renderer.sampleCount = samples
+            let pass = try SkyPass(device: device, sampleCount: renderer.effectiveSampleCount)
+            renderer.residencySet.addAllocations(pass.allocations)
+            let game = SkyOnly(pass)
+            renderer.game = game
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: FrameRenderer.colorPixelFormat,
+                                                                      width: 64, height: 64, mipmapped: false)
+            descriptor.usage = .renderTarget
+            descriptor.storageMode = .shared
+            let target = try #require(device.makeTexture(descriptor: descriptor))
+            renderer.residencySet.addAllocation(target)
+            renderer.commitResidency()
+            renderer.render(into: target)
+            var pixels = [UInt8](repeating: 0, count: 64 * 64 * 4)
+            target.getBytes(&pixels, bytesPerRow: 256, from: MTLRegionMake2D(0, 0, 64, 64), mipmapLevel: 0)
+            return pixels
+        }
+        let one = try draw(samples: 1), four = try draw(samples: 4)
+        let worst = zip(one, four).map { abs(Int($0) - Int($1)) }.max() ?? 0
+        #expect(worst <= 2, "the multisampled sky differs by \(worst) somewhere")
+        #expect(one.contains { $0 > 20 }, "not two black frames")
+    }
 }
