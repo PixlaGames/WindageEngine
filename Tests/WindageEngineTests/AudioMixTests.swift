@@ -139,6 +139,31 @@ struct AudioMixTests {
         #expect((0..<3).allSatisfy { audio.isLoaded("take_\($0)") } && !audio.isLoaded("broken"))
     }
 
+    @Test("An ambient bed is heard in both ears, follows ambience not effects, and stops")
+    func ambientBed() throws {
+        let audio = try engine()
+        let bed = try #require(audio.startAmbience("noise", volume: 0.8))
+        #expect(audio.loopCount == 1)
+        _ = try level(audio, seconds: 0.05)
+        let full = try level(audio, seconds: 0.3)
+        #expect(full.left > 0.01 && abs(full.left / full.right - 1) < 0.1, "unplaced in both ears: \(full)")
+        // Longer than the sound itself: a bed loops.
+        _ = try level(audio, seconds: 1)
+        #expect(try level(audio, seconds: 0.2).left > 0.01, "the bed did not loop")
+        audio.effectsVolume = 0
+        _ = try level(audio, seconds: 0.2)
+        let afterEffects = try level(audio, seconds: 0.3)
+        #expect(abs(afterEffects.left / full.left - 1) < 0.15, "a bed moved with the effects")
+        audio.loopVolume = 0.5
+        _ = try level(audio, seconds: 0.3)                  // a mixer's level ramps rather than jumps
+        let half = try level(audio, seconds: 0.3)
+        #expect(abs(half.left / full.left - 0.5) < 0.08, "half ambience: \(half.left / full.left)")
+        audio.stopLoop(bed)
+        _ = try level(audio, seconds: 0.05)
+        #expect(try level(audio, seconds: 0.2).left < 1e-5 && audio.loopCount == 0)
+        #expect(audio.startAmbience("missing") == nil)
+    }
+
     @Test("The meter reads a sound that played, and reads nothing after it")
     func meter() throws {
         let audio = try engine()

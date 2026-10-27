@@ -126,6 +126,10 @@ public final class AudioEngine {
     private let environment = AVAudioEnvironmentNode()
     /// The loops' spatializer — see the type's notes.
     private let nearEnvironment = AVAudioEnvironmentNode()
+    /// Every loop, placed or not — ``loopVolume``.
+    private let ambienceBus = AVAudioMixerNode()
+    /// Ambient beds playing — see ``startAmbience(_:volume:)``.
+    private var beds: [Int: AVAudioPlayerNode] = [:]
     private var players: [AVAudioPlayerNode] = []
     private var nextVoice = 0
     private var buffers: [String: AVAudioPCMBuffer] = [:]
@@ -193,8 +197,10 @@ public final class AudioEngine {
         engine.connect(effectsBus, to: engine.mainMixerNode, format: nil)
         engine.attach(environment)
         engine.connect(environment, to: effectsBus, format: nil)
+        engine.attach(ambienceBus)
+        engine.connect(ambienceBus, to: engine.mainMixerNode, format: nil)
         engine.attach(nearEnvironment)
-        engine.connect(nearEnvironment, to: engine.mainMixerNode, format: nil)
+        engine.connect(nearEnvironment, to: ambienceBus, format: nil)
 
         // Distance attenuation in metres, matching the world's units.
         for (node, falloff) in [(environment, configuration.oneShotFalloff),
@@ -384,21 +390,56 @@ public final class AudioEngine {
         return Loop(id: id)
     }
 
+    /// **An ambient bed: a loop heard everywhere, not from a point** — the wind across a valley, a room's
+    /// tone, rain. Unplaced and in the sound's own channels (a stereo bed stays wide), under ``loopVolume``
+    /// with the placed loops. Stopped with ``stopLoop(_:)``. `nil` when no sound of that name is loaded.
+    ///
+    /// **Starts somewhere different in its sound each time**, like a placed loop, so two beds of the same
+    /// recording are not one sound doubled.
+    public func startAmbience(_ name: String, volume: Float = 1) -> Loop? {
+        guard let buffer = buffers[name], buffer.frameLength > 0 else { return nil }
+        let player = AVAudioPlayerNode()
+        engine.attach(player)
+        engine.connect(player, to: ambienceBus, format: buffer.format)
+        player.volume = max(volume, 0)
+        let id = nextLoop
+        nextLoop += 1
+        let offset = AVAudioFrameCount((UInt64(id) &* 2_654_435_761) % UInt64(buffer.frameLength))
+        if offset > 0, let tail = AudioEngine.frames(of: buffer, from: offset) {
+            player.scheduleBuffer(tail, at: nil, options: [])
+        }
+        player.scheduleBuffer(buffer, at: nil, options: .loops)
+        player.play()
+        beds[id] = player
+        return Loop(id: id)
+    }
+
+    /// An ambient bed's level, 0…1, for a game that fades its weather.
+    public func setAmbienceVolume(_ loop: Loop, to volume: Float) {
+        beds[loop.id]?.volume = max(volume, 0)
+    }
+
     public func moveLoop(_ loop: Loop, to position: SIMD3<Float>) {
         loops[loop.id]?.position = AVAudio3DPoint(x: position.x, y: position.y, z: position.z)
     }
 
     public func stopLoop(_ loop: Loop) {
+        if let bed = beds.removeValue(forKey: loop.id) {
+            bed.stop()
+            engine.detach(bed)
+            return
+        }
         guard let player = loops.removeValue(forKey: loop.id) else { return }
         player.stop()
         idleLoopPlayers.append(player)
     }
 
     public func stopAllLoops() {
-        for loop in loops.keys.map(Loop.init(id:)) { stopLoop(loop) }
+        for loop in (Array(loops.keys) + Array(beds.keys)).map(Loop.init(id:)) { stopLoop(loop) }
     }
 
-    public var loopCount: Int { loops.count }
+    /// Placed loops and ambient beds playing.
+    public var loopCount: Int { loops.count + beds.count }
 
     /// **Made on demand and kept**, unlike the one-shots' fixed ring: a level has as many loops as it
     /// has things that hum, and a voice stolen from a brazier by a footstep is a fire that goes out.
@@ -527,16 +568,16 @@ public final class AudioEngine {
         voice.player.play()
     }
 
-    /// The loops, 0…1 — a brazier's crackle, a generator's hum — and **nothing else**: what a game
-    /// offers a player as its ambience setting.
+    /// The loops, 0…1 — a brazier's crackle, a generator's hum, an ambient bed — and **nothing else**: what
+    /// a game offers a player as its ambience setting.
     ///
-    /// **On the loops' own spatializer**, which is why it can be separate at all: every loop and no
+    /// **On the loops' own bus**, which is why it can be separate at all: every loop and ambient bed and no
     /// one-shot passes through it. A player who wants the fire quieter should not have to turn down
     /// their own footsteps with it, which is what one volume made them do. ``masterVolume`` still
     /// scales everything, this included.
     public var loopVolume: Float {
-        get { nearEnvironment.outputVolume }
-        set { nearEnvironment.outputVolume = min(max(newValue, 0), 1) }
+        get { ambienceBus.outputVolume }
+        set { ambienceBus.outputVolume = min(max(newValue, 0), 1) }
     }
 
     /// Every one-shot, placed or unplaced, 0…1 — what a game offers as its effects setting. Under
