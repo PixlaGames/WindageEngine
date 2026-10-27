@@ -322,6 +322,37 @@ struct PlayerSettingsTests {
         #expect(s.stickLookScale == SIMD2(0.5, -0.5))
     }
 
+    @Test("Each device's horizontal invert turns its own view the other way, and survives a save")
+    func horizontalInvert() throws {
+        var s = PlayerSettings()
+        s.mouseSensitivity = 2
+        s.invertMouseHorizontal = true
+        #expect(s.mouseLookScale == SIMD2(-2, 2) && s.stickLookScale == SIMD2(1, 1))
+        s.invertStickHorizontal = true
+        s.invertStick = true
+        #expect(s.stickLookScale == SIMD2(-1, -1))
+        s.sprintsByDefault = true
+        let back = try JSONDecoder().decode(PlayerSettings.self, from: JSONEncoder().encode(s))
+        #expect(back == s)
+        #expect(try decode(PlayerSettings.self, "{}").invertMouseHorizontal == false)
+    }
+
+    @Test("Sprinting by default sprints on the keys unless the sprint key is held")
+    @MainActor
+    func sprintsByDefault() {
+        let input = InputState()
+        var s = PlayerSettings()
+        s.sprintsByDefault = true
+        input.apply(s)
+        input.keyDown(.w)
+        #expect(input.movement.isSprinting)
+        input.keyDown(.leftShift)
+        #expect(!input.movement.isSprinting, "holding the key walks")
+        input.keyUp(.leftShift)
+        input.keyUp(.w)
+        #expect(!input.movement.isSprinting, "not moving on the keys, not sprinting by default")
+    }
+
     /// A player who set 2.0 and inverted before the per-device settings had that on both devices, and keeps it.
     @Test("A file with one shared sensitivity gives it to both devices")
     func sharedSettingMigrates() throws {

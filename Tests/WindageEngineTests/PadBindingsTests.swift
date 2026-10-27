@@ -258,6 +258,53 @@ struct InputStatePadTests {
         #expect(input.lookRate.x > 0 && input.lookRate.x < 0.001, "just past the edge should barely move: \(input.lookRate.x)")
     }
 
+    @Test("The d-pad and the system button take actions, and still step")
+    func dpadAndOptions() {
+        let (input, pad) = rig()
+        let bag = InputAction("bag"), sheet = InputAction("sheet")
+        input.padBindings = PadBindings.standard.adding(bag, defaultButton: .dpadDown).adding(sheet, defaultButton: .options)
+        pad.dpad.setValueForXAxis(0, yAxis: -1)
+        input.pollFrame()
+        #expect(input.consumePresses(of: bag) == 1 && input.padButtonsPressed.contains(.dpadDown))
+        #expect(input.consumeSteps() == SIMD2(0, -1), "the d-pad still steps")
+        if pad.buttonOptions != nil {
+            pad.buttonOptions?.setValue(1)
+            input.pollFrame()
+            #expect(input.consumePresses(of: sheet) == 1)
+        }
+        #expect(!PadButton.actionButtons.contains(where: \.isDirection) && !PadButton.actionButtons.contains(.options))
+    }
+
+    @Test("The last device touched: a pad's button or a stick past its dead zone, a key back again; a resting stick never")
+    func lastDevice() {
+        let (input, pad) = rig()
+        #expect(input.lastDevice == .keyboard)
+        pad.leftThumbstick.setValueForXAxis(0, yAxis: 0.05)
+        input.pollFrame()
+        #expect(input.lastDevice == .keyboard, "a stick inside its dead zone is a stick nobody is holding")
+        pad.leftThumbstick.setValueForXAxis(0, yAxis: 0.8)
+        input.pollFrame()
+        #expect(input.lastDevice == .gamepad)
+        input.keyDown(.w)
+        #expect(input.lastDevice == .keyboard)
+        pad.leftThumbstick.setValueForXAxis(0, yAxis: 0)
+        pad.buttonA.setValue(1)
+        input.pollFrame()
+        #expect(input.lastDevice == .gamepad)
+        input.noteKeyboardUse()
+        #expect(input.lastDevice == .keyboard)
+    }
+
+    @Test("With the sticks set aside, they neither move nor look")
+    func sticksSetAside() {
+        let (input, pad) = rig()
+        pad.leftThumbstick.setValueForXAxis(0, yAxis: 1)
+        pad.rightThumbstick.setValueForXAxis(1, yAxis: 0)
+        #expect(input.movement.forward > 0.9 && input.lookRate.x > 0.9)
+        input.acceptsPadSticks = false
+        #expect(input.movement.forward == 0 && input.lookRate == .zero)
+    }
+
     @Test("Handing the pad back to the system forgets the supplied one")
     func handBack() {
         let (input, _) = rig()

@@ -15,6 +15,21 @@ public nonisolated enum PadButton: String, CaseIterable, Sendable, Codable {
     case south, east, west, north
     case leftShoulder, rightShoulder
     case leftStick, rightStick
+    /// **The d-pad's four directions and the small system button** (2026-10-27) — bindable like any button, for a game
+    /// that opens its panels from them, as a console MMO does. The d-pad still steps (``InputState/consumeSteps()``)
+    /// whatever is bound to it; a game that steps with it keeps them out of its choices — ``actionButtons``.
+    case dpadUp, dpadDown, dpadLeft, dpadRight
+    /// The small button left of the touchpad or the face: *View* on an Xbox pad, *Create* on a DualSense. **Not every
+    /// pad has one** — an older MFi pad does not — so an action on it alone is one that pad cannot reach.
+    case options
+
+    /// **What a shooter offers for its actions**: the face buttons, the shoulders and the stick clicks. The d-pad steps
+    /// and the system button is left alone — the convention ``InputState`` sets out.
+    public static let actionButtons: [PadButton] = [.south, .east, .west, .north, .leftShoulder, .rightShoulder,
+                                                    .leftStick, .rightStick]
+
+    /// One of the d-pad's four directions.
+    public var isDirection: Bool { self == .dpadUp || self == .dpadDown || self == .dpadLeft || self == .dpadRight }
 
     /// What a settings screen shows when no pad is connected to ask: the position's name on the two
     /// pads a Mac player is likeliest to own.
@@ -28,6 +43,11 @@ public nonisolated enum PadButton: String, CaseIterable, Sendable, Codable {
         case .rightShoulder: "R1 / RB"
         case .leftStick: "L3"
         case .rightStick: "R3"
+        case .dpadUp: "D-pad Up"
+        case .dpadDown: "D-pad Down"
+        case .dpadLeft: "D-pad Left"
+        case .dpadRight: "D-pad Right"
+        case .options: "Create / View"
         }
     }
 
@@ -51,6 +71,11 @@ public nonisolated enum PadButton: String, CaseIterable, Sendable, Codable {
         case .rightShoulder: pad.rightShoulder
         case .leftStick: pad.leftThumbstickButton
         case .rightStick: pad.rightThumbstickButton
+        case .dpadUp: pad.dpad.up
+        case .dpadDown: pad.dpad.down
+        case .dpadLeft: pad.dpad.left
+        case .dpadRight: pad.dpad.right
+        case .options: pad.buttonOptions
         }
     }
 }

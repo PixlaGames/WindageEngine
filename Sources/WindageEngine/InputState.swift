@@ -92,6 +92,7 @@ public final class InputState {
 
     /// Feed raw scroll from the window. Positive is up / away from the user.
     public func addScroll(_ delta: Float) {
+        if delta != 0 { lastDevice = .keyboard }
         scrollAccumulator += delta
         while scrollAccumulator >= scrollNotch {
             scrollAccumulator -= scrollNotch
@@ -208,6 +209,15 @@ public final class InputState {
     public var isPadReportFrozen: Bool { frozenWatch.isFrozen }
     private var frozenWatch = FrozenStickWatch()
 
+    /// Whether either stick is past its dead zone — a stick being used, not one resting.
+    private func padSticksAreMoving(_ gamepad: GCExtendedGamepad) -> Bool {
+        let sticks = liveSticks(gamepad)
+        return StickResponse.shaped(sticks.left, calibration: padCalibration.left ?? StickCalibration(deadzone: moveDeadzone),
+                                    exponent: 1) != .zero
+            || StickResponse.shaped(sticks.right, calibration: padCalibration.right ?? StickCalibration(deadzone: lookDeadzone),
+                                    exponent: 1) != .zero
+    }
+
     /// Both sticks, or zero for both while the report is frozen.
     private func liveSticks(_ gamepad: GCExtendedGamepad) -> (left: SIMD2<Float>, right: SIMD2<Float>) {
         let left = SIMD2(gamepad.leftThumbstick.xAxis.value, gamepad.leftThumbstick.yAxis.value)
@@ -222,6 +232,25 @@ public final class InputState {
     public var mouseLookScale = SIMD2<Float>(1, 1)
     public var stickLookScale = SIMD2<Float>(1, 1)
 
+    /// Sprint unless the sprint key is held — ``PlayerSettings/sprintsByDefault``, from ``apply(_:)``. The keyboard's only.
+    public var sprintsByDefault = false
+
+    // MARK: - Which device
+
+    /// **The keyboard and mouse, or a pad.**
+    public enum Device: Sendable, Equatable { case keyboard, gamepad }
+
+    /// **What the player last touched** — for a prompt that teaches the control in their hands.
+    ///
+    /// **Touched, not connected**: a pad left on the desk is the normal state of a desk, and a prompt that showed its
+    /// buttons to someone on the keyboard would teach the wrong control. A key, a mouse button, the mouse moving while
+    /// captured or the wheel count as the keyboard; a pad button, a trigger, or a stick past its dead zone as the pad. A
+    /// resting stick never claims it, and a keyboard nobody is using never takes it back.
+    public private(set) var lastDevice: Device = .keyboard
+
+    /// Counts a key the game took before it reached ``keyDown(_:)`` — a door, a menu — as the keyboard being used.
+    public func noteKeyboardUse() { lastDevice = .keyboard }
+
     /// Hands over everything of the player's settings that input reads: both sets of bindings, the
     /// dead zones, and each device's sensitivity and invert. **The one call**, so a settings screen
     /// cannot set three of them and forget the fourth. Volume, brightness and head bob are not
@@ -234,6 +263,7 @@ public final class InputState {
         padCalibration = settings.padCalibration
         mouseLookScale = settings.mouseLookScale
         stickLookScale = settings.stickLookScale
+        sprintsByDefault = settings.sprintsByDefault
     }
 
     private static func deadzone(_ value: Float, else fallback: Float) -> Float {
@@ -249,6 +279,11 @@ public final class InputState {
     /// also crouch the player behind it. The presses are still reported in ``padButtonsPressed``, which
     /// is what the menu reads instead.
     public var acceptsPadActions = true
+
+    /// Whether the sticks move and look — ``movement`` and ``lookRate``. **Off while something else has the pad**, with
+    /// ``acceptsPadActions``: a stick held while typing in a chat box, or steering a menu, must not walk the player
+    /// behind it.
+    public var acceptsPadSticks = true
 
     /// Whether the pad's sprint button latches a sprint — see ``SprintLatch``.
     ///
@@ -322,6 +357,7 @@ public final class InputState {
         // resting a finger on `C` would strobe the crouch at the repeat rate.
         let wasDown = pressedKeys.contains(key)
         pressedKeys.insert(key)
+        lastDevice = .keyboard
         if !wasDown, let action = bindings.action(on: key) {
             pendingPresses[action, default: 0] += 1
             if action == .crouch { toggleCrouch() }
@@ -382,8 +418,14 @@ public final class InputState {
     public func setSprinting(_ sprinting: Bool) {
         sprintingFromKeyboard = sprinting
     }
-    public func setRightMouse(_ held: Bool) { isRightMouseHeld = held }
-    public func setLeftMouse(_ held: Bool) { isLeftMouseHeld = held }
+    public func setRightMouse(_ held: Bool) {
+        isRightMouseHeld = held
+        if held { lastDevice = .keyboard }
+    }
+    public func setLeftMouse(_ held: Bool) {
+        isLeftMouseHeld = held
+        if held { lastDevice = .keyboard }
+    }
 
     /// How far the left and right triggers are pulled, 0…1 — 0 with no pad. **Axes, not bindings**:
     /// what a pull means, and how far is far enough, is the game's.
@@ -445,21 +487,34 @@ public final class InputState {
     public func addMouseDelta(x: Float, y: Float) {
         guard isMouseCaptured else { return }
         pendingLook += SIMD2(x, y)
+        if x != 0 || y != 0 { lastDevice = .keyboard }
     }
 
     // MARK: - Capture
+
+    /// Where the cursor was when the mouse was captured, to put it back on release.
+    private var capturedAt: NSPoint?
 
     public func setMouseCaptured(_ captured: Bool) {
         guard captured != isMouseCaptured else { return }
         isMouseCaptured = captured
 
         if captured {
+            capturedAt = NSEvent.mouseLocation
             NSCursor.hide()
             // Detach the pointer from the cursor so it can keep generating deltas at the edge of
             // the screen instead of stopping dead against it.
             CGAssociateMouseAndMouseCursorPosition(0)
         } else {
             CGAssociateMouseAndMouseCursorPosition(1)
+            // **The cursor comes back where it was taken**, not wherever it drifted while hidden — a player who held a
+            // button to look round lets go and finds the pointer on the thing they were about to click. Cocoa counts up
+            // from the bottom of the main screen and the warp from its top.
+            if let at = capturedAt {
+                let height = NSScreen.screens.first?.frame.height ?? 0
+                CGWarpMouseCursorPosition(CGPoint(x: at.x, y: height - at.y))
+            }
+            capturedAt = nil
             NSCursor.unhide()
             pendingLook = .zero
         }
@@ -485,6 +540,10 @@ public final class InputState {
         })
         padButtonsPressed = down.subtracting(padButtonsDown)
         padButtonsDown = down
+        if let gamepad, !down.isEmpty || gamepad.leftTrigger.value > 0.2 || gamepad.rightTrigger.value > 0.2
+            || gamepad.buttonMenu.isPressed || padSticksAreMoving(gamepad) {
+            lastDevice = .gamepad
+        }
         let menuDown = gamepad?.buttonMenu.isPressed ?? false
         wasPadMenuPressed = menuDown && !padMenuWasDown
         padMenuWasDown = menuDown
@@ -535,6 +594,13 @@ public final class InputState {
     /// own while the player is in another app.
     public func releaseAll() {
         setMouseCaptured(false)
+        releaseKeys()
+    }
+
+    /// **Drops every held key, button and banked movement, and leaves the pointer as it is** — for a game whose own rules
+    /// decide when the mouse is given back: opening a chat box or a menu stops the walking, and whether the view keeps
+    /// the pointer is a separate question.
+    public func releaseKeys() {
         pressedKeys.removeAll()
         sprintingFromKeyboard = false
         isRightMouseHeld = false
@@ -560,9 +626,12 @@ public final class InputState {
         if isKeyHeld(.left) { input.strafe -= 1 }
         if isKeyHeld(.jump) { input.vertical += 1 }
         if isKeyHeld(.crouch) { input.vertical -= 1 }
-        input.isSprinting = isKeyHeld(.sprint)
+        // Held, or — for a player who sprints by default, while the keys are moving them — not held. The stick is
+        // left out: a player steering with it never pressed the key, and is not asking to sprint by default.
+        let keysMove = isKeyHeld(.forward) || isKeyHeld(.back) || isKeyHeld(.left) || isKeyHeld(.right)
+        input.isSprinting = isKeyHeld(.sprint) != (sprintsByDefault && keysMove)
 
-        if let gamepad {
+        if let gamepad, acceptsPadSticks {
             let stick = StickResponse.shaped(
                 liveSticks(gamepad).left,
                 calibration: padCalibration.left ?? StickCalibration(deadzone: moveDeadzone), exponent: moveExponent)
@@ -602,7 +671,7 @@ public final class InputState {
     /// Unlike the mouse delta this is a held position rather than a displacement, so the camera
     /// scales it by step duration. See `Camera.turn(rate:deltaTime:)`.
     public var lookRate: SIMD2<Float> {
-        guard let gamepad else { return .zero }
+        guard let gamepad, acceptsPadSticks else { return .zero }
         return StickResponse.shaped(
             liveSticks(gamepad).right,
             calibration: padCalibration.right ?? StickCalibration(deadzone: lookDeadzone), exponent: lookExponent)

@@ -446,6 +446,16 @@ public nonisolated struct PlayerSettings: Sendable, Equatable, Codable {
     /// Pushing the look stick up looks down.
     public var invertStick = false
 
+    /// **Moving the mouse right turns the view left** — rarer than the vertical invert, and wanted for the same reason by
+    /// the players who want it: it is how they learned to steer. Per device, like the vertical.
+    public var invertMouseHorizontal = false
+    /// Pushing the look stick right turns the view left.
+    public var invertStickHorizontal = false
+
+    /// **Sprint without holding the key; holding it walks** — the keyboard's sprint inverted, for a player crossing large
+    /// ground who would otherwise hold Shift for most of the game. The pad is not affected: its stick has every pace.
+    public var sprintsByDefault = false
+
     /// How far each stick must move before it counts, 0…0.5 of its travel.
     ///
     /// **A worn stick drifts**: it rests a few percent off center, and past the dead zone that is a
@@ -526,13 +536,13 @@ public nonisolated struct PlayerSettings: Sendable, Equatable, Codable {
     /// What a mouse delta is multiplied by on its way to ``Camera/look(mouseDelta:)`` — by
     /// ``InputState/consumeLook()``, once ``InputState/apply(_:)`` has handed it over.
     public var mouseLookScale: SIMD2<Float> {
-        SIMD2(mouseSensitivity, invertMouse ? -mouseSensitivity : mouseSensitivity)
+        SIMD2(invertMouseHorizontal ? -mouseSensitivity : mouseSensitivity, invertMouse ? -mouseSensitivity : mouseSensitivity)
     }
 
     /// What a stick's look rate is multiplied by on its way to ``Camera/turn(rate:deltaTime:)`` — by
     /// ``InputState/lookRate``, once ``InputState/apply(_:)`` has handed it over.
     public var stickLookScale: SIMD2<Float> {
-        SIMD2(stickSensitivity, invertStick ? -stickSensitivity : stickSensitivity)
+        SIMD2(invertStickHorizontal ? -stickSensitivity : stickSensitivity, invertStick ? -stickSensitivity : stickSensitivity)
     }
 
     private static func clamp(_ value: Float, _ range: ClosedRange<Float>, _ fallback: Float) -> Float {
@@ -543,6 +553,7 @@ public nonisolated struct PlayerSettings: Sendable, Equatable, Codable {
         case bindings, padBindings, mouseSensitivity, stickSensitivity, invertMouse, invertStick
         case moveDeadzone, lookDeadzone, volume, ambienceVolume, brightness, padCalibration
         case effectsVolume, musicVolume, soundInBackground
+        case invertMouseHorizontal, invertStickHorizontal, sprintsByDefault
         case headBobAmount = "headBob"
         /// Read, never written: one sensitivity and one invert for both devices, before 2026-09-11.
         case lookSensitivity, invertLook
@@ -584,6 +595,9 @@ public nonisolated struct PlayerSettings: Sendable, Equatable, Codable {
         musicVolume = PlayerSettings.clamp(
             (try? c.decodeIfPresent(Float.self, forKey: .musicVolume)) ?? 0.45, 0...1, 0.45)
         soundInBackground = (try? c.decodeIfPresent(Bool.self, forKey: .soundInBackground)) ?? false
+        invertMouseHorizontal = (try? c.decodeIfPresent(Bool.self, forKey: .invertMouseHorizontal)) ?? false
+        invertStickHorizontal = (try? c.decodeIfPresent(Bool.self, forKey: .invertStickHorizontal)) ?? false
+        sprintsByDefault = (try? c.decodeIfPresent(Bool.self, forKey: .sprintsByDefault)) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -604,5 +618,8 @@ public nonisolated struct PlayerSettings: Sendable, Equatable, Codable {
         try c.encode(effectsVolume, forKey: .effectsVolume)
         try c.encode(musicVolume, forKey: .musicVolume)
         try c.encode(soundInBackground, forKey: .soundInBackground)
+        try c.encode(invertMouseHorizontal, forKey: .invertMouseHorizontal)
+        try c.encode(invertStickHorizontal, forKey: .invertStickHorizontal)
+        try c.encode(sprintsByDefault, forKey: .sprintsByDefault)
     }
 }
