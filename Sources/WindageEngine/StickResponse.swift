@@ -41,15 +41,31 @@ public nonisolated enum StickResponse {
     /// negative one divided a resting stick's zero by zero, and one of 1 divided by nothing at all —
     /// and an exponent that is not a positive number is taken as linear.
     public static func shaped(_ raw: SIMD2<Float>, deadzone: Float, exponent: Float) -> SIMD2<Float> {
-        let deadzone = deadzone.isFinite ? min(max(deadzone, 0), 0.99) : 0
+        shaped(raw, calibration: StickCalibration(deadzone: deadzone), exponent: exponent)
+    }
+
+    /// The same, for a stick that has been measured (``StickCalibration``): its resting point taken off first, then
+    /// its own dead zone.
+    ///
+    /// **Moving the center costs travel on one side, and that has to be given back.** A stick resting 0.1 forward reaches
+    /// only 0.9 when pushed forward once the offset is subtracted — so full forward would no longer be full speed, on the
+    /// very pad this exists to rescue. Dividing by how far this direction can actually reach makes the edge mean 1 again,
+    /// whichever way it leans. Floored well above the dead zone, so a wild measurement cannot divide by nothing.
+    public static func shaped(_ raw: SIMD2<Float>, calibration: StickCalibration, exponent: Float) -> SIMD2<Float> {
+        let deadzone = calibration.deadzone.isFinite ? min(max(calibration.deadzone, 0), 0.99) : 0
         let exponent = exponent.isFinite && exponent > 0 ? exponent : 1
-        let magnitude = simd_length(raw)
+        let center = SIMD2(calibration.center.x.isFinite ? calibration.center.x : 0,
+                           calibration.center.y.isFinite ? calibration.center.y : 0)
+        let centred = raw - center
+        let magnitude = simd_length(centred)
         guard magnitude > deadzone else { return .zero }
+        let direction = centred / magnitude
+        let reach = max(1 - simd_dot(center, direction), 0.5)
 
         // Sticks can read slightly past 1 on the diagonals; clamp so full deflection is full speed
         // and not a little more.
-        let rescaled = min((magnitude - deadzone) / (1 - deadzone), 1)
+        let rescaled = min((magnitude - deadzone) / max(reach - deadzone, 0.01), 1)
         let curved = pow(rescaled, exponent)
-        return raw / magnitude * curved
+        return direction * curved
     }
 }

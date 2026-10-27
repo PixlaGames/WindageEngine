@@ -476,6 +476,10 @@ public nonisolated struct PlayerSettings: Sendable, Equatable, Codable {
         didSet { headBobAmount = PlayerSettings.clamp(headBobAmount, 0...1, 1) }
     }
 
+    /// **Each stick as measured** (``PadMeasurement``), or ``PadCalibration/unmeasured``: a measured stick has its resting
+    /// point taken off and its own dead zone, in place of ``moveDeadzone`` or ``lookDeadzone``.
+    public var padCalibration = PadCalibration.unmeasured
+
     /// Everything the game plays, 0…1.
     public var volume: Float = 0.8 {
         didSet { volume = PlayerSettings.clamp(volume, 0...1, 0.8) }
@@ -521,7 +525,7 @@ public nonisolated struct PlayerSettings: Sendable, Equatable, Codable {
 
     private enum CodingKeys: String, CodingKey {
         case bindings, padBindings, mouseSensitivity, stickSensitivity, invertMouse, invertStick
-        case moveDeadzone, lookDeadzone, volume, ambienceVolume, brightness
+        case moveDeadzone, lookDeadzone, volume, ambienceVolume, brightness, padCalibration
         case headBobAmount = "headBob"
         /// Read, never written: one sensitivity and one invert for both devices, before 2026-09-11.
         case lookSensitivity, invertLook
@@ -557,6 +561,7 @@ public nonisolated struct PlayerSettings: Sendable, Equatable, Codable {
             (try? c.decodeIfPresent(Float.self, forKey: .ambienceVolume)) ?? 1, 0...1, 1)
         brightness = PlayerSettings.clamp(
             (try? c.decodeIfPresent(Float.self, forKey: .brightness)) ?? 0, PlayerSettings.brightnessRange, 0)
+        padCalibration = (try? c.decodeIfPresent(PadCalibration.self, forKey: .padCalibration)) ?? .unmeasured
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -573,5 +578,6 @@ public nonisolated struct PlayerSettings: Sendable, Equatable, Codable {
         try c.encode(volume, forKey: .volume)
         try c.encode(ambienceVolume, forKey: .ambienceVolume)
         try c.encode(brightness, forKey: .brightness)
+        try c.encode(padCalibration, forKey: .padCalibration)
     }
 }

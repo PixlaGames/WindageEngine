@@ -192,6 +192,31 @@ public final class InputState {
         didSet { if !(lookExponent.isFinite && lookExponent > 0) { lookExponent = StickResponse.lookExponent } }
     }
 
+    /// Each stick as measured — from ``apply(_:)``. A measured stick's own center and dead zone replace
+    /// ``moveDeadzone`` or ``lookDeadzone`` (``StickResponse/shaped(_:calibration:exponent:)``).
+    public var padCalibration = PadCalibration.unmeasured
+
+    /// Both sticks as the pad reports them, before any dead zone — what ``PadMeasurement`` watches. Nil with no pad.
+    public var rawSticks: (left: SIMD2<Float>, right: SIMD2<Float>)? {
+        guard let gamepad else { return nil }
+        return (SIMD2(gamepad.leftThumbstick.xAxis.value, gamepad.leftThumbstick.yAxis.value),
+                SIMD2(gamepad.rightThumbstick.xAxis.value, gamepad.rightThumbstick.yAxis.value))
+    }
+
+    /// True while the pad repeats one non-zero reading rather than sending new ones (``FrozenStickWatch``): its sticks
+    /// read as centered until it moves again.
+    public var isPadReportFrozen: Bool { frozenWatch.isFrozen }
+    private var frozenWatch = FrozenStickWatch()
+
+    /// Both sticks, or zero for both while the report is frozen.
+    private func liveSticks(_ gamepad: GCExtendedGamepad) -> (left: SIMD2<Float>, right: SIMD2<Float>) {
+        let left = SIMD2(gamepad.leftThumbstick.xAxis.value, gamepad.leftThumbstick.yAxis.value)
+        let right = SIMD2(gamepad.rightThumbstick.xAxis.value, gamepad.rightThumbstick.yAxis.value)
+        let frozen = frozenWatch.observe(left: left, right: right, at: ProcessInfo.processInfo.systemUptime,
+                                         restBelow: max(moveDeadzone, lookDeadzone))
+        return frozen ? (.zero, .zero) : (left, right)
+    }
+
     /// What ``consumeLook()`` and ``lookRate`` multiply by — the player's sensitivity and invert for
     /// each device, from ``apply(_:)``. `(1, 1)` until then.
     public var mouseLookScale = SIMD2<Float>(1, 1)
@@ -206,6 +231,7 @@ public final class InputState {
         padBindings = settings.padBindings
         moveDeadzone = settings.moveDeadzone
         lookDeadzone = settings.lookDeadzone
+        padCalibration = settings.padCalibration
         mouseLookScale = settings.mouseLookScale
         stickLookScale = settings.stickLookScale
     }
@@ -538,8 +564,8 @@ public final class InputState {
 
         if let gamepad {
             let stick = StickResponse.shaped(
-                SIMD2(gamepad.leftThumbstick.xAxis.value, gamepad.leftThumbstick.yAxis.value),
-                deadzone: moveDeadzone, exponent: moveExponent)
+                liveSticks(gamepad).left,
+                calibration: padCalibration.left ?? StickCalibration(deadzone: moveDeadzone), exponent: moveExponent)
             input.strafe += stick.x
             input.forward += stick.y
 
@@ -578,7 +604,8 @@ public final class InputState {
     public var lookRate: SIMD2<Float> {
         guard let gamepad else { return .zero }
         return StickResponse.shaped(
-            SIMD2(gamepad.rightThumbstick.xAxis.value, gamepad.rightThumbstick.yAxis.value),
-            deadzone: lookDeadzone, exponent: lookExponent) * stickLookScale
+            liveSticks(gamepad).right,
+            calibration: padCalibration.right ?? StickCalibration(deadzone: lookDeadzone), exponent: lookExponent)
+            * stickLookScale
     }
 }
