@@ -385,7 +385,11 @@ public final class ShadowMap {
     /// ``updateMatrices(frameSlot:camera:sunDirection:)`` must have run for this frame slot, and the
     /// per-object uniforms must already be written — the pass reads the same `model` matrix the main
     /// pass will, which is what keeps a shadow attached to the thing that cast it.
-    public func encode(into commandBuffer: MTL4CommandBuffer, frameSlot: Int, batches: [ShadowBatch]) {
+    /// - Parameter castingCascades: how many cascades, nearest first, are drawn into; the rest are cleared and so read as
+    ///   lit — near shadows only, for a player who asks for them (``GraphicsSettings/Shadows/castingCascades(of:)``).
+    ///   All of them by default.
+    public func encode(into commandBuffer: MTL4CommandBuffer, frameSlot: Int, batches: [ShadowBatch],
+                       castingCascades: Int = .max) {
         let matrixBase = frameSlot * cascades.count * ShadowMap.matrixStride
 
         for cascade in 0..<cascades.count {
@@ -422,7 +426,7 @@ public final class ShadowMap {
                 matrixBuffer.gpuAddress + UInt64(matrixBase + cascade * ShadowMap.matrixStride),
                 index: ShadowBufferIndex.lightViewProjection)
 
-            for batch in batches {
+            for batch in batches where cascade < castingCascades {
                 switch batch.kind {
                 case .encodes(let encode):
                     encoder.setRenderPipelineState(batch.pipeline)

@@ -126,6 +126,37 @@ struct ShadowMapTests {
         #expect(fromCamera == fromParts)
     }
 
+    /// **Near shadows only** (2026-10-27): the cascades past the limit are cleared and drawn into by nothing.
+    @Test("A casting limit draws only the nearer cascades")
+    func castingLimit() throws {
+        guard let device = MTLCreateSystemDefaultDevice(), device.supportsFamily(.metal4),
+              let shadowMap = makeShadowMap() else { return }
+        let library = try device.makeLibrary(source: """
+            #include <metal_stdlib>
+            using namespace metal;
+            vertex float4 nothing(uint id [[vertex_id]]) { return float4(0, 0, 0, 1); }
+            """, options: nil)
+        let function = MTL4LibraryFunctionDescriptor()
+        function.library = library
+        function.name = "nothing"
+        let compiler = try device.makeCompiler(descriptor: MTL4CompilerDescriptor())
+        let pipeline = try compiler.makeRenderPipelineState(
+            descriptor: ShadowMap.pipelineDescriptor(vertexFunction: function, vertexDescriptor: MTLVertexDescriptor(), label: "Test"))
+        var drawn: [Int] = []
+        let batch = ShadowBatch(pipeline: pipeline) { _, _, pass in
+            if case .cascade(let cascade) = pass.target { drawn.append(cascade) }
+        }
+        let queue = try #require(device.makeMTL4CommandQueue())
+        let allocator = try #require(device.makeCommandAllocator())
+        let commands = try #require(device.makeCommandBuffer())
+        commands.beginCommandBuffer(allocator: allocator)
+        shadowMap.encode(into: commands, frameSlot: 0, batches: [batch], castingCascades: 2)
+        shadowMap.encode(into: commands, frameSlot: 0, batches: [batch])
+        commands.endCommandBuffer()
+        _ = queue
+        #expect(drawn == [0, 1, 0, 1, 2, 3])
+    }
+
     @Test("A batch that encodes its own draws has its own index for instances")
     func instancesHaveTheirOwnIndex() {
         let indices = [ShadowBufferIndex.vertices, ShadowBufferIndex.uniforms,

@@ -76,14 +76,15 @@ public nonisolated struct GraphicsSettings: Equatable, Sendable, Codable {
     /// Trees and bushes stay whole: thinning them changes the world, not its cost.
     public var plantDensity: Float = 1
     public var renderScale: RenderScale = .automatic
-    /// Frames a second asked of the display (``frameRates``) — ``frameRateRange``.
+    /// Frames a second asked of the display (``frameRates``) — ``frameRateRange``. 60 unless a game starts elsewhere.
     public var frameRate: Int = 60
     /// Samples per pixel in the scene (``FrameRenderer/sampleCount``): 1 is none, 4 smooths every edge.
     public var antiAliasing: Int = 4
 
     public static let drawDistanceRange: ClosedRange<Float> = 0.5...1
     public static let plantDensityRange: ClosedRange<Float> = 0.25...1
-    public static let frameRates = [60, 30]
+    /// What a display can be asked for. A game offers the ones that suit it — a world dressed for 60 need not offer 120.
+    public static let frameRates = [120, 60, 30]
     public static let antiAliasingChoices = [1, 2, 4]
 
     public init() {}
