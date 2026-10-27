@@ -70,11 +70,19 @@ public final class ParticleRenderer {
     private let instanceBytes: Int
     private static let frameStride = (MemoryLayout<Frame>.size + 255) & ~255
 
-    /// - Parameter capacity: the most particles drawn in one frame. **No default**: it is the
-    ///   ``ParticleSystem/capacity`` of the system drawn, and a game names one number for both — past
-    ///   it, live particles are not drawn.
+    /// - Parameters:
+    ///   - capacity: the most particles drawn in one frame. **No default**: it is the
+    ///     ``ParticleSystem/capacity`` of the system drawn, and a game names one number for both — past
+    ///     it, live particles are not drawn.
+    ///   - colorPixelFormat: what the pass it draws into is. The engine's HDR scene unless a game draws
+    ///     its scene into a target of its own.
+    ///   - sampleCount: that pass's samples per pixel — ``FrameRenderer/effectiveSampleCount`` for the
+    ///     engine's scene. A pipeline must match the pass it draws in, so a renderer is made again when
+    ///     the count changes.
     /// - Throws: ``ParticleRendererError`` when the shaders, the pipeline or a buffer cannot be made.
-    public init(device: MTLDevice, capacity: Int) throws {
+    public init(device: MTLDevice, capacity: Int,
+                colorPixelFormat: MTLPixelFormat = FrameRenderer.sceneColorPixelFormat,
+                sampleCount: Int = 1) throws {
         self.capacity = max(1, capacity)
         instanceBytes = MemoryLayout<Instance>.stride * self.capacity
         do {
@@ -92,8 +100,8 @@ public final class ParticleRenderer {
             descriptor.label = "Particles"
             descriptor.vertexFunctionDescriptor = vertexFunction
             descriptor.fragmentFunctionDescriptor = fragmentFunction
-            descriptor.rasterSampleCount = 1
-            descriptor.colorAttachments[0].pixelFormat = FrameRenderer.sceneColorPixelFormat
+            descriptor.rasterSampleCount = max(sampleCount, 1)
+            descriptor.colorAttachments[0].pixelFormat = colorPixelFormat
             // **Premultiplied.** See ``ParticleRecipe/glows`` — this one blend serves both light and
             // matter, and straight alpha here would darken every particle by its own opacity twice.
             descriptor.colorAttachments[0].blendingState = .enabled
