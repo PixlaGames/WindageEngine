@@ -478,6 +478,18 @@ public final class FrameRenderer {
         retiredTargets.removeAll { $0.lastUsedBy <= finished }
     }
 
+    /// **The targets again, if the game changed ``sampleCount`` in its pre-passes** — where a game reads its settings
+    /// for the frame. The targets were made before the pre-passes ran; drawn into as they were, a game's pipelines rebuilt
+    /// for the new count meet targets of the old one, which Metal's validation stops on (2026-10-26, a game turning
+    /// anti-aliasing on from its saved settings in its first frame).
+    private func targetsAfterPrePasses(width: Int, height: Int, depth: MTLTexture,
+                                       scene: MTLTexture) -> (MTLTexture, MTLTexture)? {
+        guard depth.sampleCount != effectiveSampleCount else { return (depth, scene) }
+        updateRenderTargets(width: width, height: height)
+        guard let depthTexture, let sceneTexture else { return nil }
+        return (depthTexture, sceneTexture)
+    }
+
     /// The scene pass's colour: the scene target itself, or the multisampled target resolved into it.
     private func sceneColourAttachment(_ pass: MTL4RenderPassDescriptor, scene: MTLTexture) {
         let colour = pass.colorAttachments[0]!
@@ -569,6 +581,8 @@ public final class FrameRenderer {
         commandBuffer.beginCommandBuffer(allocator: allocator)
 
         game.encodePrePasses(into: commandBuffer, frameSlot: frameSlot, interpolation: interpolation)
+        guard let (depthTexture, sceneTexture) = targetsAfterPrePasses(width: texture.width, height: texture.height,
+                                                                       depth: depthTexture, scene: sceneTexture) else { return }
 
         let passDescriptor = MTL4RenderPassDescriptor()
         sceneColourAttachment(passDescriptor, scene: sceneTexture)
@@ -617,6 +631,9 @@ public final class FrameRenderer {
         commandBuffer.beginCommandBuffer(allocator: allocator)
 
         game.encodePrePasses(into: commandBuffer, frameSlot: frameSlot, interpolation: alpha)
+        guard let (depthTexture, sceneTexture) = targetsAfterPrePasses(width: drawable.texture.width,
+                                                                       height: drawable.texture.height,
+                                                                       depth: depthTexture, scene: sceneTexture) else { return }
 
         // **Pass one: the scene, into an HDR target.** Not into the drawable — see
         // `sceneColorPixelFormat`.

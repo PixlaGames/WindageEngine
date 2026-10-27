@@ -98,8 +98,7 @@ struct TextureStoreTests {
         let texture = try store.texture(.url(url), isColor: false)
 
         // Texture row 0 is what `v = 0` samples.
-        var texel = [UInt8](repeating: 0, count: 4)
-        texture.getBytes(&texel, bytesPerRow: 4, from: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0)
+        let texel = try Self.firstTexel(texture)
         let red = texel[2], blue = texel[0]        // BGRA
         #expect(blue > red, "v = 0 sampled the top of the image; every USD and OBJ asset is flipped")
     }
@@ -114,9 +113,25 @@ struct TextureStoreTests {
         let top = try store.texture(.url(url), isColor: false, origin: .topLeft)
         #expect(bottom !== top, "the cache key does not include the origin")
 
-        var texel = [UInt8](repeating: 0, count: 4)
-        top.getBytes(&texel, bytesPerRow: 4, from: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0)
+        let texel = try Self.firstTexel(top)
         #expect(texel[2] > texel[0], "a top-left origin should put the image's top row at v = 0")
+    }
+
+    /// The top-left texel, copied out by the GPU: a loaded texture is private, and **reading a private texture from the
+    /// CPU is not allowed** — it happened to work until the suite ran under Metal's validation (2026-10-26).
+    static func firstTexel(_ texture: MTLTexture) throws -> [UInt8] {
+        let device = texture.device
+        let buffer = try #require(device.makeBuffer(length: 4, options: .storageModeShared))
+        let queue = try #require(device.makeCommandQueue())
+        let commands = try #require(queue.makeCommandBuffer())
+        let blit = try #require(commands.makeBlitCommandEncoder())
+        blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: 1, height: 1, depth: 1), to: buffer, destinationOffset: 0,
+                  destinationBytesPerRow: 4, destinationBytesPerImage: 4)
+        blit.endEncoding()
+        commands.commit()
+        commands.waitUntilCompleted()
+        return Array(UnsafeBufferPointer(start: buffer.contents().bindMemory(to: UInt8.self, capacity: 4), count: 4))
     }
 
     @Test("Everything loaded is offered to the residency set")

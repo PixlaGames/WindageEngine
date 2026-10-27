@@ -107,6 +107,53 @@ struct DaySkyTests {
         #expect(Int(above[0]) > Int(below[0]) + 40, "the ground below is darker: above \(above), below \(below)")
     }
 
+    /// A game that turns multisampling on from its own settings, in its pre-passes, on its first frame.
+    private final class TurnsOnMultisampling: GameLoop {
+        let pass: SkyPass
+        weak var renderer: FrameRenderer?
+        init(_ pass: SkyPass) { self.pass = pass }
+        func beginFrame() {}
+        func step(deltaTime: Float) {}
+        func viewportSizeChanged(width: Int, height: Int) {}
+        func encodePrePasses(into commandBuffer: MTL4CommandBuffer, frameSlot: Int, interpolation: Float) {
+            renderer?.sampleCount = 4
+        }
+        func encode(into encoder: MTL4RenderCommandEncoder, frameSlot: Int, interpolation: Float) {
+            let projection = simd_float4x4(perspectiveFovY: 1.2, aspectRatio: 1, nearZ: 0.1)
+            pass.encode(into: encoder, frameSlot: frameSlot, viewProjection: projection, eye: .zero,
+                        lighting: DaySky(timeOfDay: 15).lighting)
+        }
+    }
+
+    /// **A sample count changed in the pre-passes applies to that same frame** (2026-10-26). The targets were made before
+    /// the pre-passes; drawn into as they were, 4× pipelines met 1× targets — Metal's validation stops the game there, and
+    /// without validation the frame is undefined. Run the suite with `MTL_DEBUG_LAYER=1` to hold it to that.
+    @Test("Multisampling turned on in the pre-passes draws that frame multisampled")
+    @MainActor
+    func sampleCountChangedInPrePasses() throws {
+        guard let device = MTLCreateSystemDefaultDevice(), device.supportsFamily(.metal4), device.supportsTextureSampleCount(4)
+        else { return }
+        let renderer = try FrameRenderer(device: device)
+        let pass = try SkyPass(device: device, sampleCount: 4)
+        renderer.residencySet.addAllocations(pass.allocations)
+        let game = TurnsOnMultisampling(pass)
+        game.renderer = renderer
+        renderer.game = game
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: FrameRenderer.colorPixelFormat,
+                                                                  width: 64, height: 64, mipmapped: false)
+        descriptor.usage = .renderTarget
+        descriptor.storageMode = .shared
+        let target = try #require(device.makeTexture(descriptor: descriptor))
+        renderer.residencySet.addAllocation(target)
+        renderer.commitResidency()
+        #expect(renderer.effectiveSampleCount == 1)
+        renderer.render(into: target)
+        #expect(renderer.effectiveSampleCount == 4)
+        var pixel = [UInt8](repeating: 0, count: 4)
+        target.getBytes(&pixel, bytesPerRow: 256, from: MTLRegionMake2D(32, 4, 1, 1), mipmapLevel: 0)
+        #expect(pixel.contains { $0 > 20 }, "the sky was drawn: \(pixel)")
+    }
+
     /// **Multisampled, the same sky** (2026-10-26): the scene drawn at four samples a pixel and resolved into the target
     /// the tone map reads. The sky has no edges to smooth, so it comes out as it does at one sample — which proves the
     /// targets, the resolve and a pipeline built for the count all fit together.
