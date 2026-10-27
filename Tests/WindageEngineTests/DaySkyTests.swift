@@ -186,3 +186,29 @@ struct DaySkyTests {
         #expect(one.contains { $0 > 20 }, "not two black frames")
     }
 }
+
+@Suite("A world's own sky")
+struct DaySkyLookTests {
+
+    @Test("The engine's own look changes nothing, and the sky's light is its zenith")
+    func defaultsChangeNothing() {
+        for hour in stride(from: Float(0), to: 24, by: 1.5) {
+            let lighting = DaySky(timeOfDay: hour).lighting
+            #expect(lighting.skyLight == lighting.zenith)
+        }
+    }
+
+    /// **The sky drawn, not the light it casts** — a deeper sky must not darken a world's shadows.
+    @Test("A deeper sky is bluer and darker overhead, and lights the world the same")
+    func deeperSkyKeepsItsLight() {
+        let plain = DaySky(timeOfDay: 13).lighting
+        let deep = DaySky(timeOfDay: 13, saturation: 2.5, zenithBrightness: 0.5).lighting
+        #expect(deep.skyLight == plain.zenith, "the light from above changed with the look")
+        #expect(deep.colour == plain.colour && deep.ground == plain.ground)
+        let luma = { (c: SIMD3<Float>) in simd_dot(c, SIMD3(0.2126, 0.7152, 0.0722)) }
+        #expect(abs(luma(deep.horizon) - luma(plain.horizon)) < 1e-4, "saturation moved the horizon's brightness")
+        #expect(deep.horizon.z - deep.horizon.x > plain.horizon.z - plain.horizon.x, "the horizon is no bluer")
+        #expect(luma(deep.zenith) < luma(plain.zenith) * 0.6, "the zenith is no darker")
+        #expect(simd_reduce_min(deep.zenith) >= 0 && simd_reduce_min(deep.horizon) >= 0, "a colour went negative")
+    }
+}

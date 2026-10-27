@@ -21,10 +21,23 @@ public nonisolated struct DaySky: Sendable, Equatable {
     /// half of a thing gone at about 100 m and nearly all of it by 250. Per sky, because a world decides its own air.
     public var fogDensity: Float
 
-    public init(timeOfDay: Float = 15, sun: Sun? = nil, fogDensity: Float = 0) {
+    /// **How colourful this world's sky is drawn**, against the engine's: 1 is the engine's own, 2 twice as far from
+    /// grey, 0 grey. Like ``fogDensity``, per sky, because a world decides its own air — thin, dry air over a high
+    /// range is a deep blue, a damp lowland a pale one. It changes the sky drawn and what distance fades into
+    /// (``Lighting/zenith``, ``Lighting/horizon``), **not the light the sky casts** (``Lighting/skyLight``), so a deeper
+    /// sky does not darken a world's shadows.
+    public var saturation: Float = 1
+    /// **How bright the sky overhead is drawn**, against the horizon: 1 the engine's own, 0.5 half — the darker zenith
+    /// of thin air. The same as ``saturation``: the sky drawn, not the light it casts.
+    public var zenithBrightness: Float = 1
+
+    public init(timeOfDay: Float = 15, sun: Sun? = nil, fogDensity: Float = 0,
+                saturation: Float = 1, zenithBrightness: Float = 1) {
         self.timeOfDay = timeOfDay
         self.sun = sun
         self.fogDensity = fogDensity
+        self.saturation = saturation
+        self.zenithBrightness = zenithBrightness
     }
 
     /// How much fog lies between the eye and a point this far away, 0…1 (``fogDensity``).
@@ -71,7 +84,7 @@ public nonisolated struct DaySky: Sendable, Equatable {
         public var direction: SIMD3<Float>
         /// The light's radiance.
         public var colour: SIMD3<Float>
-        /// The sky straight up; also the ambient light from above.
+        /// The sky straight up, as drawn — after the world's ``DaySky/saturation`` and ``DaySky/zenithBrightness``.
         public var zenith: SIMD3<Float>
         /// The sky at the horizon — what distance fades into.
         public var horizon: SIMD3<Float>
@@ -79,6 +92,9 @@ public nonisolated struct DaySky: Sendable, Equatable {
         public var ground: SIMD3<Float>
         /// The sun's height above the horizon, radians; below zero at night.
         public var elevation: Float
+        /// **The light from the sky above**, for ambient: the zenith before a world's look is applied, so a deeper or
+        /// paler sky does not change how lit a world is. The same as ``zenith`` when the look is the engine's own.
+        public var skyLight: SIMD3<Float> = .zero
 
         /// **A little of the eye's adjustment to the dark**, for ``ToneMapping/exposureStops``: night is shown darker,
         /// not black, so a scene can be judged at any hour — the exposure opens as the light falls, by at most three stops.
@@ -99,6 +115,19 @@ public nonisolated struct DaySky: Sendable, Equatable {
     }
 
     public var lighting: Lighting {
+        var lighting = unstyledLighting
+        lighting.skyLight = lighting.zenith
+        guard saturation != 1 || zenithBrightness != 1 else { return lighting }
+        func saturated(_ colour: SIMD3<Float>) -> SIMD3<Float> {
+            let luma = simd_dot(colour, SIMD3(0.2126, 0.7152, 0.0722))
+            return simd_max(SIMD3(repeating: luma) + (colour - luma) * max(saturation, 0), .zero)
+        }
+        lighting.zenith = saturated(lighting.zenith) * max(zenithBrightness, 0)
+        lighting.horizon = saturated(lighting.horizon)
+        return lighting
+    }
+
+    private var unstyledLighting: Lighting {
         if let sun {
             let key = Self.blend(Self.keys, at: sun.height)
             return Lighting(direction: sun.direction, colour: sun.colour * sun.brightness,
