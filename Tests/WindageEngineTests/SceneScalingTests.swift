@@ -1,5 +1,6 @@
 import Testing
 import Metal
+import AppKit
 @testable import WindageEngine
 
 struct SceneScalingTests {
@@ -71,5 +72,31 @@ struct SceneScalingTests {
             Issue.record("pixel \(i / 4) is \(Array(pixels[i..<i + 4])), not \(first)")
             break
         }
+    }
+}
+
+/// The engine's frame check: a PNG of the frame, and frames timed.
+@Suite("Frame check")
+struct FrameCheckTests {
+    private final class Clear: GameLoop {
+        func beginFrame() {}
+        func step(deltaTime: Float) {}
+        func viewportSizeChanged(width: Int, height: Int) {}
+        func encode(into encoder: MTL4RenderCommandEncoder, frameSlot: Int, interpolation: Float) {}
+    }
+
+    @Test("A frame comes out as a PNG of the size asked, and frames time in sorted order")
+    @MainActor
+    func pngAndTiming() throws {
+        guard let device = MTLCreateSystemDefaultDevice(), device.supportsFamily(.metal4) else { return }
+        let renderer = try FrameRenderer(device: device)
+        let game = Clear()
+        renderer.game = game
+        let png = try #require(renderer.pngFrame(width: 40, height: 30))
+        #expect(png.starts(with: [0x89, 0x50, 0x4E, 0x47]), "not a PNG")
+        let image = try #require(NSImage(data: png))
+        #expect(image.representations.first?.pixelsWide == 40 && image.representations.first?.pixelsHigh == 30)
+        let times = renderer.timeFrames(width: 40, height: 30, count: 5, warmUp: 1)
+        #expect(times.count == 5 && times == times.sorted())
     }
 }
