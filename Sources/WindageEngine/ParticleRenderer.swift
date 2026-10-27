@@ -48,12 +48,20 @@ public nonisolated enum ParticleRendererError: Error, CustomStringConvertible, S
 
 public final class ParticleRenderer {
 
-    /// One particle as the shader reads it. **Two `float4`s**, pinned by a test on size, stride and
-    /// alignment.
+    /// One particle as the shader reads it. **Three `float4`s**, pinned by a test on size, stride and
+    /// alignment: the third is its atlas cell (u0, v0, du, dv), `du` 0 for a soft disc — and its width,
+    /// against its height, in `widthScale` beside it.
     struct Instance {
         var positionAndHalfSize: SIMD4<Float>
         var colorAndCoverage: SIMD4<Float>
+        var spriteCell: SIMD4<Float>
+        var widthScale: SIMD4<Float>
     }
+
+    /// The sprites' sheet, cut into cells — a recipe's ``ParticleRecipe/sprite`` names one. Nil draws every particle
+    /// as a soft disc.
+    public let atlas: DecalAtlas?
+    private let spriteTexture: MTLTexture
 
     struct Frame {
         var viewProjection: simd_float4x4
@@ -80,10 +88,27 @@ public final class ParticleRenderer {
     ///     engine's scene. A pipeline must match the pass it draws in, so a renderer is made again when
     ///     the count changes.
     /// - Throws: ``ParticleRendererError`` when the shaders, the pipeline or a buffer cannot be made.
+    ///   - sprites: a texture of particle sprites — butterflies, petals, leaves — cut by `atlas`; nil draws
+    ///     every particle as a soft disc. Mipmapped, or sprites at range shimmer.
     public init(device: MTLDevice, capacity: Int,
                 colorPixelFormat: MTLPixelFormat = FrameRenderer.sceneColorPixelFormat,
-                sampleCount: Int = 1) throws {
+                sampleCount: Int = 1, sprites: MTLTexture? = nil, atlas: DecalAtlas = .whole) throws {
         self.capacity = max(1, capacity)
+        self.atlas = sprites == nil ? nil : atlas
+        if let sprites {
+            spriteTexture = sprites
+        } else {
+            // A shader that samples a texture needs one bound: a white texel nothing reads.
+            let blank = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1,
+                                                                 mipmapped: false)
+            blank.storageMode = .shared
+            guard let texture = device.makeTexture(descriptor: blank) else {
+                throw ParticleRendererError.couldNotCreate("blank sprite texture")
+            }
+            texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: [UInt8](repeating: 255, count: 4),
+                            bytesPerRow: 4)
+            spriteTexture = texture
+        }
         instanceBytes = MemoryLayout<Instance>.stride * self.capacity
         do {
             let library = try ShaderLibrary.make(device: device, bundle: .module,
@@ -137,6 +162,7 @@ public final class ParticleRenderer {
 
         let table = MTL4ArgumentTableDescriptor()
         table.maxBufferBindCount = 2
+        table.maxTextureBindCount = 1
         do {
             argumentTable = try device.makeArgumentTable(descriptor: table)
         } catch {
@@ -144,7 +170,7 @@ public final class ParticleRenderer {
         }
     }
 
-    public var allocations: [any MTLAllocation] { [instanceBuffer, frameBuffer] }
+    public var allocations: [any MTLAllocation] { [instanceBuffer, frameBuffer, spriteTexture] }
 
     /// Draws every live particle, in one instanced draw.
     ///
@@ -176,8 +202,13 @@ public final class ParticleRenderer {
             guard count < capacity else { break }
             let look = system.appearance(of: particle)
             let lit = system.recipes[particle.recipe].glows ? look.color : look.color * matterLight
+            let cell = system.recipes[particle.recipe].sprite.flatMap { sprite in
+                atlas.map { $0.rect(column: sprite % $0.columns, row: sprite / $0.columns) }
+            } ?? .zero
             instances[count] = Instance(positionAndHalfSize: SIMD4(particle.position, look.size * 0.5),
-                                        colorAndCoverage: SIMD4(lit, look.coverage))
+                                        colorAndCoverage: SIMD4(lit, look.coverage),
+                                        spriteCell: cell,
+                                        widthScale: SIMD4(system.width(of: particle), 0, 0, 0))
             count += 1
         }
         guard count > 0 else { return 0 }
@@ -193,7 +224,8 @@ public final class ParticleRenderer {
         encoder.setRenderPipelineState(pipelineState)
         encoder.setDepthStencilState(depthState)
         encoder.setCullMode(.none)
-        encoder.setArgumentTable(argumentTable, stages: .vertex)
+        encoder.setArgumentTable(argumentTable, stages: [.vertex, .fragment])
+        argumentTable.setTexture(spriteTexture.gpuResourceID, index: 0)
         argumentTable.setAddress(instanceBuffer.gpuAddress + UInt64(base), index: 0)
         argumentTable.setAddress(frameBuffer.gpuAddress + UInt64(frameOffset), index: 1)
         encoder.drawPrimitives(primitiveType: .triangleStrip, vertexStart: 0, vertexCount: 4,

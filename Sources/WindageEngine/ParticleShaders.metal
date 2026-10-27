@@ -15,6 +15,8 @@ using namespace metal;
 struct WEParticle {
     float4 positionAndHalfSize;   // xyz world position, w half the edge in metres
     float4 colourAndCoverage;     // rgb colour premultiplied by opacity, a coverage (0 for light)
+    float4 spriteCell;            // atlas u0, v0, du, dv — du 0 for a soft disc
+    float4 widthScale;            // x: width against height — a wingbeat
 };
 
 struct WEParticleFrame {
@@ -27,6 +29,8 @@ struct WEParticleOut {
     float4 position [[position]];
     float2 corner;
     float4 colour;
+    float2 uv;
+    float sprite;
 };
 
 /// **Expanded from one instance in the vertex shader**, so the CPU writes a position and a color
@@ -42,12 +46,15 @@ vertex WEParticleOut weParticleVertex(uint vertexID [[vertex_id]],
     const float2 corner = corners[vertexID];
     const WEParticle p = particles[instanceID];
     const float3 world = p.positionAndHalfSize.xyz
-                       + (frame.right.xyz * corner.x + frame.up.xyz * corner.y) * p.positionAndHalfSize.w;
+                       + (frame.right.xyz * corner.x * p.widthScale.x + frame.up.xyz * corner.y) * p.positionAndHalfSize.w;
 
     WEParticleOut out;
     out.position = frame.viewProjection * float4(world, 1.0);
     out.corner = corner;
     out.colour = p.colourAndCoverage;
+    // Top of the image at the quad's top.
+    out.uv = p.spriteCell.xy + float2(corner.x * 0.5 + 0.5, 0.5 - corner.y * 0.5) * p.spriteCell.zw;
+    out.sprite = p.spriteCell.z > 0.0 ? 1.0 : 0.0;
     return out;
 }
 
@@ -57,8 +64,17 @@ vertex WEParticleOut weParticleVertex(uint vertexID [[vertex_id]],
 /// **Premultiplied, and that is what lets light and matter share this.** The blend is
 /// `src + dst × (1 − src.a)`. Matter writes its opacity as coverage and covers what is behind it;
 /// light writes zero, and the same equation becomes a plain add.
-fragment float4 weParticleFragment(WEParticleOut in [[stage_in]])
+fragment float4 weParticleFragment(WEParticleOut in [[stage_in]], texture2d<float> sprites [[texture(0)]])
 {
+    if (in.sprite > 0.5) {
+        // **A sprite: the cell's own colour and shape**, tinted and faded by the particle. Clamped, so a cell never
+        // bleeds its neighbour in at the edge.
+        constexpr sampler cell(mag_filter::linear, min_filter::linear, mip_filter::linear, address::clamp_to_edge);
+        const float4 texel = sprites.sample(cell, in.uv);
+        const float alpha = texel.a * in.colour.a;
+        if (alpha <= 0.004 && in.colour.a > 0.0) { discard_fragment(); }
+        return float4(in.colour.rgb * texel.rgb * texel.a, alpha);
+    }
     const float r = length(in.corner);
     float falloff = saturate(1.0 - r);
     falloff *= falloff;

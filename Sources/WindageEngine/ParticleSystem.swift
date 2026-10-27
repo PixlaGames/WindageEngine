@@ -15,7 +15,7 @@ import simd
 ///
 /// **Its limits hold however it is set**: ``count`` is never negative and ``lifetime`` never below a
 /// millisecond — a lifetime of zero divided by zero in every particle's ``ParticleSystem/Particle/progress``.
-public nonisolated struct ParticleRecipe: Sendable, Equatable {
+public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
 
     /// How many one burst throws. Never negative.
     public var count: Int {
@@ -61,12 +61,33 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable {
     /// blend into an add. Two pipelines would mean two draws and a sort between them.
     public var glows: Bool = false
 
+    // MARK: Living things and drifting things — butterflies, motes, petals (2026-10-27)
+
+    /// **How hard it wanders**, meters per second squared: a smooth drift that never repeats the same way twice
+    /// and is the same every run. 0 flies straight. A butterfly wanders; a spark does not.
+    public var wander: Float = 0
+    /// How fast the wander turns, in turns a second. Slow is a drift, fast is a flutter.
+    public var wanderRate: Float = 0.3
+    /// Meters per second it never goes faster than — what keeps a wanderer near where it was born.
+    public var maxSpeed: Float = .infinity
+    /// Meters: born anywhere within this of the burst's origin rather than at it — a swarm, not a fountain.
+    public var spawnRadius: Float = 0
+    /// Seconds it takes to appear, so nothing long-lived pops into being.
+    public var fadeIn: Float = 0
+    /// **Wingbeats a second**: its width closes and opens this often, which is a wing flapping when the sprite is
+    /// a pair of wings seen from above. 0 holds still.
+    public var flapRate: Float = 0
+    /// The atlas cell it is drawn with — ``ParticleRenderer``'s texture — or nil for a soft disc.
+    public var sprite: Int?
+
     private var storedCount: Int
     private var storedLifetime: Float
 
     public init(count: Int, speed: Float, spread: Float, lifetime: Float, size: Float,
                 growth: Float = 0, gravity: Float = -6.5, drag: Float = 2.4,
-                color: SIMD3<Float>, opacity: Float = 1, fade: Float = 1, glows: Bool = false) {
+                color: SIMD3<Float>, opacity: Float = 1, fade: Float = 1, glows: Bool = false,
+                wander: Float = 0, wanderRate: Float = 0.3, maxSpeed: Float = .infinity, spawnRadius: Float = 0,
+                fadeIn: Float = 0, flapRate: Float = 0, sprite: Int? = nil) {
         self.storedCount = max(0, count)
         self.speed = speed
         self.spread = spread
@@ -79,6 +100,48 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable {
         self.opacity = opacity
         self.fade = fade
         self.glows = glows
+        self.wander = max(wander, 0)
+        self.wanderRate = max(wanderRate, 0)
+        self.maxSpeed = maxSpeed > 0 ? maxSpeed : .infinity
+        self.spawnRadius = max(spawnRadius, 0)
+        self.fadeIn = max(fadeIn, 0)
+        self.flapRate = max(flapRate, 0)
+        self.sprite = sprite
+    }
+
+    // MARK: Saved
+
+    private enum CodingKeys: String, CodingKey {
+        case count, speed, spread, lifetime, size, growth, gravity, drag, color, opacity, fade, glows
+        case wander, wanderRate, maxSpeed, spawnRadius, fadeIn, flapRate, sprite
+    }
+
+    /// **Saved as JSON, every field but a color optional** — a pack describes an effect in a file, and a file from
+    /// before a field was added keeps meaning what it meant. A top speed of none is left out rather than written.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func value<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T { (try? c.decodeIfPresent(T.self, forKey: key)) ?? fallback }
+        self.init(count: value(.count, 1), speed: value(.speed, 0), spread: value(.spread, 0),
+                  lifetime: value(.lifetime, 1), size: value(.size, 0.1), growth: value(.growth, 0),
+                  gravity: value(.gravity, -6.5), drag: value(.drag, 2.4),
+                  color: try c.decode(SIMD3<Float>.self, forKey: .color),
+                  opacity: value(.opacity, 1), fade: value(.fade, 1), glows: value(.glows, false),
+                  wander: value(.wander, 0), wanderRate: value(.wanderRate, 0.3),
+                  maxSpeed: value(.maxSpeed, .infinity), spawnRadius: value(.spawnRadius, 0),
+                  fadeIn: value(.fadeIn, 0), flapRate: value(.flapRate, 0),
+                  sprite: (try? c.decodeIfPresent(Int.self, forKey: .sprite)) ?? nil)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(count, forKey: .count); try c.encode(speed, forKey: .speed); try c.encode(spread, forKey: .spread)
+        try c.encode(lifetime, forKey: .lifetime); try c.encode(size, forKey: .size); try c.encode(growth, forKey: .growth)
+        try c.encode(gravity, forKey: .gravity); try c.encode(drag, forKey: .drag); try c.encode(color, forKey: .color)
+        try c.encode(opacity, forKey: .opacity); try c.encode(fade, forKey: .fade); try c.encode(glows, forKey: .glows)
+        try c.encode(wander, forKey: .wander); try c.encode(wanderRate, forKey: .wanderRate)
+        if maxSpeed.isFinite { try c.encode(maxSpeed, forKey: .maxSpeed) }
+        try c.encode(spawnRadius, forKey: .spawnRadius); try c.encode(fadeIn, forKey: .fadeIn)
+        try c.encode(flapRate, forKey: .flapRate); try c.encodeIfPresent(sprite, forKey: .sprite)
     }
 }
 
@@ -115,6 +178,8 @@ public nonisolated struct ParticleSystem: Sendable {
         public let recipe: Int
         /// When it was born, in bursts thrown — what "oldest" means when the pool is full.
         let birth: Int
+        /// 0…1, its own: where its wander and its wingbeat start, so a swarm does not move as one.
+        let seed: Float
 
         /// 0 at birth, 1 at death.
         public var progress: Float { min(1, age / lifetime) }
@@ -147,7 +212,12 @@ public nonisolated struct ParticleSystem: Sendable {
             let recipe = recipes[particles[index].recipe]
             particles[index].age += deltaTime
             particles[index].velocity.y += recipe.gravity * deltaTime
+            if recipe.wander > 0 {
+                particles[index].velocity += ParticleSystem.wander(of: particles[index], recipe) * deltaTime
+            }
             particles[index].velocity *= max(0, 1 - recipe.drag * deltaTime)
+            let speed = simd_length(particles[index].velocity)
+            if speed > recipe.maxSpeed { particles[index].velocity *= recipe.maxSpeed / speed }
             particles[index].position += particles[index].velocity * deltaTime
         }
     }
@@ -177,13 +247,25 @@ public nonisolated struct ParticleSystem: Sendable {
             let spread = SIMD3(a - 0.5, b - 0.5, c - 0.5) * 2 * r.spread
             let velocity = axis * r.speed * (0.45 + a * 0.75) + spread
 
-            add(Particle(position: origin,
+            // Born within the spawn radius: a direction from three more draws, a distance from a fourth, cube-rooted
+            // so the sphere fills evenly rather than crowding its middle.
+            var place = origin
+            if r.spawnRadius > 0 {
+                let d = SIMD3(ParticleSystem.hash(seed, i * 7 + 3), ParticleSystem.hash(seed, i * 7 + 4),
+                              ParticleSystem.hash(seed, i * 7 + 5)) * 2 - 1
+                let length = simd_length(d)
+                if length > 1e-4 {
+                    place += d / length * r.spawnRadius * pow(ParticleSystem.hash(seed, i * 7 + 6), 1 / 3)
+                }
+            }
+            add(Particle(position: place,
                          velocity: velocity,
                          age: 0,
                          lifetime: r.lifetime * (0.6 + b * 0.8),
                          size: r.size * (0.7 + c * 0.6),
                          recipe: recipe,
-                         birth: births))
+                         birth: births,
+                         seed: ParticleSystem.hash(seed, i * 7 + 2_000_003)))
         }
         births += 1
     }
@@ -207,8 +289,29 @@ public nonisolated struct ParticleSystem: Sendable {
     public func appearance(of particle: Particle) -> (color: SIMD3<Float>, coverage: Float, size: Float) {
         let r = recipes[particle.recipe]
         let t = particle.progress
-        let opacity = r.opacity * pow(max(0, 1 - t), r.fade)
+        let appearing = r.fadeIn > 0 ? min(particle.age / r.fadeIn, 1) : 1
+        let opacity = r.opacity * pow(max(0, 1 - t), r.fade) * appearing
         return (r.color * opacity, r.glows ? 0 : opacity, particle.size * (1 + r.growth * t))
+    }
+
+    /// **How wide it is drawn against its size, 0…1** — a wingbeat for a recipe that flaps, else 1. The width closes
+    /// to a quarter and opens again: a pair of wings seen from above, beating.
+    public func width(of particle: Particle) -> Float {
+        let r = recipes[particle.recipe]
+        guard r.flapRate > 0 else { return 1 }
+        let beat = abs(cos((particle.age * r.flapRate + particle.seed) * .pi))
+        return 0.25 + 0.75 * beat
+    }
+
+    /// The acceleration a wanderer feels now: three slow waves at its own phases, a different mix on each axis and
+    /// weaker up and down, so it drifts and dips rather than climbs. **Smooth and the same every run** — no random
+    /// draw — like everything else here.
+    private static func wander(of particle: Particle, _ recipe: ParticleRecipe) -> SIMD3<Float> {
+        let t = particle.age * recipe.wanderRate * 2 * .pi
+        let p = particle.seed * 2 * .pi
+        return recipe.wander * SIMD3(sin(t + p * 3) + 0.5 * sin(t * 2.3 + p * 7),
+                                     0.4 * sin(t * 1.7 + p * 5),
+                                     cos(t * 1.3 + p * 11) + 0.5 * sin(t * 2.9 + p * 13)) / 1.5
     }
 
     /// A deterministic 0…1 from a seed and an index.
@@ -265,6 +368,30 @@ public nonisolated struct ParticleEmitter: Sendable {
         self.recipe = recipe
         self.storedRate = max(0, rate)
         self.seedBase = seedBase
+    }
+
+    /// **Runs `seconds` of emitting and stepping at once**, so a swarm that has always been there is already flying
+    /// when a scene appears — rather than a first butterfly being born in front of the player.
+    public mutating func prewarm(_ system: inout ParticleSystem, at origin: SIMD3<Float>,
+                                 direction: SIMD3<Float> = SIMD3(0, 1, 0), seconds: Float, step: Float = 1.0 / 30) {
+        guard seconds > 0, step > 0 else { return }
+        for _ in 0..<Int((seconds / step).rounded(.up)) {
+            emit(into: &system, at: origin, direction: direction, deltaTime: step)
+            system.step(deltaTime: step)
+        }
+    }
+
+    /// **Prewarms every emitter feeding one system together** — one after another would age the first one's
+    /// particles through every later one's prewarm too. `origins[i]` is where `emitters[i]` is.
+    public static func prewarm(_ emitters: inout [ParticleEmitter], at origins: [SIMD3<Float>],
+                               into system: inout ParticleSystem, seconds: Float, step: Float = 1.0 / 30) {
+        guard seconds > 0, step > 0, emitters.count == origins.count else { return }
+        for _ in 0..<Int((seconds / step).rounded(.up)) {
+            for index in emitters.indices {
+                emitters[index].emit(into: &system, at: origins[index], deltaTime: step)
+            }
+            system.step(deltaTime: step)
+        }
     }
 
     /// Emits whatever is owed for this step into `system`.
