@@ -150,6 +150,21 @@ public nonisolated struct GraphicsSettings: Equatable, Sendable, Codable {
     /// The preset these settings are, or nil when a player has set them their own way.
     public var preset: Preset? { Preset.allCases.first { $0.settings == self } }
 
+    /// **The settings in one line**, for a report that has to say what it measured — "High" for a preset, every value for
+    /// settings of a player's own: `shadows low, draw 80%, ground cover 75%, scale ¾, 2× anti-aliasing, 60 fps`.
+    public var summary: String {
+        if let preset { return "\(preset.rawValue.prefix(1).uppercased())\(preset.rawValue.dropFirst()), \(frameRate) fps" }
+        let scale = switch renderScale {
+        case .automatic: "automatic"
+        case .full: "full"
+        case .threeQuarters: "¾"
+        case .half: "½"
+        }
+        return "shadows \(shadows.rawValue), draw \(Int((drawDistance * 100).rounded()))%, "
+            + "ground cover \(Int((plantDensity * 100).rounded()))%, scale \(scale), "
+            + "\(antiAliasing)× anti-aliasing, \(frameRate) fps"
+    }
+
     // MARK: Ground cover
 
     /// **Whether copy `index` of a thinned kind is drawn at `density`.** The same copies at the same density every frame

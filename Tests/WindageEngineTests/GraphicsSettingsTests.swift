@@ -22,6 +22,14 @@ struct GraphicsSettingsTests {
         #expect(own.preset == nil)
     }
 
+    @Test("The settings in one line: a preset by name, a player's own value by value")
+    func summary() {
+        #expect(GraphicsSettings().summary == "High, 60 fps")
+        var own = GraphicsSettings.Preset.medium.settings
+        own.renderScale = .threeQuarters
+        #expect(own.summary == "shadows low, draw 80%, ground cover 75%, scale ¾, 2× anti-aliasing, 60 fps")
+    }
+
     @Test("Saved settings that ask for more or less than the screen offers are brought back in range")
     func clamped() {
         var s = GraphicsSettings()

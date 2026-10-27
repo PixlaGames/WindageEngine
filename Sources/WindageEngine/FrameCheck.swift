@@ -58,6 +58,40 @@ extension FrameRenderer {
         return times.sorted()
     }
 
+    /// **A flythrough drawn off screen** (``Flythrough``) — every frame of the route as it would come at `framesPerSecond`,
+    /// each drawn into a texture this size and waited for, so a window that is hidden, tucked away or behind another
+    /// changes nothing. A frame's interval here is its whole time, CPU and GPU one after the other; its cost is the larger
+    /// of the two, as on screen.
+    ///
+    /// `place` puts the game's camera where the route says before each frame. With more than one pass, `switchPass` is
+    /// told each pass's name as it begins — the game turns that pass's thing off and the last one's back on; nothing for
+    /// the baselines — and nil at the end, to put everything back.
+    public func flyThrough(_ route: Flythrough, passes: [String] = ["baseline"], width: Int, height: Int,
+                           framesPerSecond: Float = 60, ground: (Float, Float) -> Float?,
+                           place: (Flythrough.Pose) -> Void, switchPass: (String?) -> Void = { _ in }) -> FlythroughReport {
+        var run = FlythroughRun(route: route, passes: passes)
+        run.offScreen = true
+        // A few frames held at the start of each pass: pipelines, residency and whatever a pass switched back on.
+        run.settleSeconds = 4 / framesPerSecond
+        guard let texture = frameCheckTarget(width: width, height: height) else { return run.report }
+        defer {
+            residencySet.removeAllocation(texture)
+            commitResidency()
+            switchPass(nil)
+        }
+        switchPass(run.passes[0])
+        while !run.isFinished {
+            place(run.pose(ground: ground))
+            let start = CACurrentMediaTime()
+            let frame = nextFrameIndex
+            render(into: texture)
+            let wall = (CACurrentMediaTime() - start) * 1000
+            let times = FrameTimes(interval: wall, cpu: lastFrameTimes.cpu, gpu: gpuMilliseconds(ofFrame: frame))
+            if run.record(times, seconds: 1 / framesPerSecond) { switchPass(run.passes[run.pass]) }
+        }
+        return run.report
+    }
+
     /// Writes PNG data to a file, or to standard output for `-` — the only place a sandboxed app can hand a file to
     /// whoever ran it. True when written.
     public static func writeFrameCheck(_ png: Data, to path: String) -> Bool {

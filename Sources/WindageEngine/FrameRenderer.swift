@@ -162,6 +162,15 @@ public final class FrameRenderer {
 
     public weak var game: GameLoop?
 
+    /// **What the last frame cost** (``FrameTimes``): its interval, its CPU work and the GPU's time — for a readout, and
+    /// for timing a route (``FlythroughRun``).
+    public private(set) var lastFrameTimes = FrameTimes()
+    /// GPU times as Metal reports frames finished.
+    let gpuClock = FrameGPUClock()
+    /// The frame's CPU work so far — its steps — and when its encoding began, after waiting for a frame in flight.
+    private var stepsTook: Double = 0
+    private var encodeBegan: Double = 0
+
     private let commandAllocators: [MTL4CommandAllocator]
     private let endFrameEvent: MTLSharedEvent
     private var frameIndex: Int
@@ -383,7 +392,8 @@ public final class FrameRenderer {
 
         // The display link reports when the frame will be *shown*, which is the clock animation and
         // ballistics belong on. The first frame has no predecessor and contributes no time.
-        let frameTime = clock.frame(presented: presentationTime, now: CACurrentMediaTime())
+        let began = CACurrentMediaTime()
+        let frameTime = clock.frame(presented: presentationTime, now: began)
 
         game?.beginFrame()
 
@@ -391,9 +401,37 @@ public final class FrameRenderer {
         for _ in 0..<steps {
             game?.step(deltaTime: Float(timestep.stepDuration))
         }
+        stepsTook = CACurrentMediaTime() - began
 
         render(to: drawable, interpolation: timestep.interpolation)
+        lastFrameTimes.interval = frameTime * 1000
     }
+
+    /// Commits the frame's command buffer, asking Metal for how long the GPU spent on it, and notes the CPU's share.
+    private func commitTimed() {
+        let options = MTL4CommitOptions()
+        let clock = gpuClock, frame = frameIndex
+        options.addFeedbackHandler { feedback in
+            clock.record(frame: frame, start: feedback.gpuStartTime, end: feedback.gpuEndTime)
+        }
+        commandQueue.commit([commandBuffer], options: options)
+        lastFrameTimes.cpu = (stepsTook + CACurrentMediaTime() - encodeBegan) * 1000
+        lastFrameTimes.gpu = gpuClock.latest
+        stepsTook = 0
+    }
+
+    /// The GPU time of a frame drawn into a texture, which has finished — waiting briefly for Metal's report of it, which
+    /// can arrive just after the frame itself.
+    func gpuMilliseconds(ofFrame frame: Int) -> Double? {
+        for _ in 0..<200 {
+            if let time = gpuClock.milliseconds(forFrame: frame) { return time }
+            usleep(250)
+        }
+        return nil
+    }
+
+    /// The index the next frame will be drawn with.
+    var nextFrameIndex: Int { frameIndex }
 
     private func updateRenderTargets(width drawableWidth: Int, height drawableHeight: Int) {
         guard drawableWidth > 0, drawableHeight > 0 else { return }
@@ -576,6 +614,7 @@ public final class FrameRenderer {
             NSLog("\(Engine.name): GPU has not completed frame \(previousValueToWaitFor) after 1 s; still waiting.")
         }
         let frameSlot = frameIndex % FrameRenderer.maxFramesInFlight
+        encodeBegan = CACurrentMediaTime()
         let allocator = commandAllocators[frameSlot]
         allocator.reset()
         commandBuffer.beginCommandBuffer(allocator: allocator)
@@ -603,7 +642,7 @@ public final class FrameRenderer {
         encodeToneMapAndInterface(to: texture, scene: sceneTexture, frameSlot: frameSlot,
                                   interpolation: interpolation, game: game)
         commandBuffer.endCommandBuffer()
-        commandQueue.commit([commandBuffer])
+        commitTimed()
         commandQueue.signalEvent(endFrameEvent, value: UInt64(frameIndex))
         frameIndex += 1
         // Nothing presents this one, so nothing else will wait for it: wait here.
@@ -626,6 +665,7 @@ public final class FrameRenderer {
         }
 
         let frameSlot = frameIndex % FrameRenderer.maxFramesInFlight
+        encodeBegan = CACurrentMediaTime()
         let allocator = commandAllocators[frameSlot]
         allocator.reset()
         commandBuffer.beginCommandBuffer(allocator: allocator)
@@ -673,7 +713,7 @@ public final class FrameRenderer {
         commandBuffer.endCommandBuffer()
 
         commandQueue.waitForDrawable(drawable)
-        commandQueue.commit([commandBuffer])
+        commitTimed()
         commandQueue.signalDrawable(drawable)
         commandQueue.signalEvent(endFrameEvent, value: UInt64(frameIndex))
         frameIndex += 1
