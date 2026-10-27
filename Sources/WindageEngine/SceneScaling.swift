@@ -13,13 +13,22 @@ public nonisolated enum SceneScaling: Sendable, Equatable {
     case native
     /// Drawn `width` pixels across, keeping the drawable's shape, once the drawable is wider than `beyond`.
     case capped(width: Int, beyond: Int)
+    /// Drawn at this fraction of the drawable each way, whatever its size — a player's own trade of sharpness for
+    /// speed. 1 or more is the drawable's size; never under one pixel.
+    case fraction(Double)
 
     /// The scene's size for a drawable of this size, in pixels.
     public func sceneSize(drawableWidth: Int, drawableHeight: Int) -> (width: Int, height: Int) {
-        guard case .capped(let width, let beyond) = self, drawableWidth > beyond, drawableWidth > width, width > 0 else {
+        switch self {
+        case .native:
             return (drawableWidth, drawableHeight)
+        case .fraction(let f):
+            guard f < 1, f > 0 else { return (drawableWidth, drawableHeight) }
+            return (max(Int((Double(drawableWidth) * f).rounded()), 1), max(Int((Double(drawableHeight) * f).rounded()), 1))
+        case .capped(let width, let beyond):
+            guard drawableWidth > beyond, drawableWidth > width, width > 0 else { return (drawableWidth, drawableHeight) }
+            let height = (Double(drawableHeight) * Double(width) / Double(drawableWidth)).rounded()
+            return (width, max(Int(height), 1))
         }
-        let height = (Double(drawableHeight) * Double(width) / Double(drawableWidth)).rounded()
-        return (width, max(Int(height), 1))
     }
 }

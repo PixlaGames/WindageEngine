@@ -22,6 +22,14 @@ struct SceneScalingTests {
         #expect(capped.sceneSize(drawableWidth: 2600, drawableHeight: 1600) == (2600, 1600))
     }
 
+    @Test("A fraction draws the scene that much smaller each way, at any size")
+    func fractionScalesEveryDrawable() {
+        #expect(SceneScaling.fraction(0.5).sceneSize(drawableWidth: 1960, drawableHeight: 1490) == (980, 745))
+        #expect(SceneScaling.fraction(0.75).sceneSize(drawableWidth: 3840, drawableHeight: 2160) == (2880, 1620))
+        #expect(SceneScaling.fraction(1).sceneSize(drawableWidth: 1200, drawableHeight: 800) == (1200, 800))
+        #expect(SceneScaling.fraction(0.0001).sceneSize(drawableWidth: 100, drawableHeight: 50) == (1, 1))
+    }
+
     /// A game that draws nothing: the frame is the clear colour, through the scaled tone map.
     private final class Empty: GameLoop {
         var sizes: [(Int, Int)] = []
