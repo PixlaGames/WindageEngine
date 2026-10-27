@@ -2107,3 +2107,29 @@ struct CharacterTeleportTests {
         #expect(t.walkSpeed == 6 && t.sprintSpeed == 18)
     }
 }
+
+/// Walls a game describes as a test of a point, rather than as boxes or triangles.
+@Suite("Character controller — a game's own walls")
+struct CharacterOwnWallsTests {
+    /// Everything at x ≥ 2 is a wall.
+    private let world = CharacterController.Surroundings(isBlocked: { $0.x >= 2 })
+    private let step: Float = 1.0 / 120
+
+    @Test("A wall stops the body short of it, and the other axis slides along it")
+    func stopsAndSlides() {
+        var body = CharacterController(feet: .zero)
+        for _ in 0..<240 {
+            body.step(yaw: -.pi / 2, input: MovementInput(forward: 1, strafe: 0.5), deltaTime: step, in: world)
+        }
+        // Facing +x (yaw −90°) and strafing toward +z: stopped at the wall, still moving along it.
+        #expect(body.feet.x < 2 && body.feet.x > 1.9, "stopped at x \(body.feet.x)")
+        #expect(body.feet.z > 3, "it stuck to the wall: z \(body.feet.z)")
+    }
+
+    @Test("A body somewhere blocked can walk out")
+    func walksOut() {
+        var body = CharacterController(feet: SIMD3(3, 0, 0))
+        for _ in 0..<120 { body.step(yaw: .pi / 2, input: MovementInput(forward: 1), deltaTime: step, in: world) }
+        #expect(body.feet.x < 2, "it was held inside: x \(body.feet.x)")
+    }
+}

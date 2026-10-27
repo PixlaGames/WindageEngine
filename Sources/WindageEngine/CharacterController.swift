@@ -207,11 +207,23 @@ public nonisolated struct CharacterController: Sendable {
             }
         }
 
+        /// **Walls a game describes its own way** — whether the body may stand at a point on the ground plane, for a world
+        /// whose obstacles are not boxes or triangles: an occupancy grid made from its buildings, a navigation mask. A move
+        /// that would end where this says *blocked* is refused, axis by axis, so the body slides along the wall rather
+        /// than sticking to it; a body already somewhere blocked may always move, so it can walk out. Nil, nothing.
+        ///
+        /// **It stops the body a step short rather than at the face** — a test of a point says nothing about where the face
+        /// is — which at a walk is a few centimetres. Boxes and meshes meet the face exactly; use them where the world has
+        /// them.
+        public var isBlocked: (@Sendable (SIMD2<Float>) -> Bool)?
+
         public init(groundHeight: @escaping @Sendable (Float, Float) -> Float = { _, _ in 0 },
-                    solids: [Solid] = [], meshes: CollisionMesh? = nil) {
+                    solids: [Solid] = [], meshes: CollisionMesh? = nil,
+                    isBlocked: (@Sendable (SIMD2<Float>) -> Bool)? = nil) {
             self.groundHeight = groundHeight
             self.solids = solids
             self.meshes = meshes
+            self.isBlocked = isBlocked
         }
     }
 
@@ -461,9 +473,11 @@ public nonisolated struct CharacterController: Sendable {
     /// sounds — and what a moving platform needs to know to carry you, when there is one.
     public private(set) var groundSolid: Int?
 
-    /// How far through the current stride, 0…1.
-    private var stridePhase: Float = 0
-    private var nextFoot: Foot = .left
+    /// **How far through the current stride, 0…1** — 0 as a foot lands. With ``nextFoot``, what a carried weapon's bob
+    /// locks to, so the rifle dips as the footstep sounds rather than on a clock of its own.
+    public private(set) var stridePhase: Float = 0
+    /// The foot that lands at the end of this stride.
+    public private(set) var nextFoot: Foot = .left
     private var wasMoving = false
 
     public init(feet: SIMD3<Float>, tuning: Tuning = Tuning()) {
@@ -809,6 +823,10 @@ public nonisolated struct CharacterController: Sendable {
                                ignoring pusher: Int? = nil) {
         guard delta != .zero else { return }
         let candidate = feet + delta
+        // The game's own walls, if it has them: refused here, and the other axis's move is the slide.
+        if let blocked = world.isBlocked, blocked(SIMD2(candidate.x, candidate.z)), !blocked(SIMD2(feet.x, feet.z)) {
+            return
+        }
 
         // What would be in the way, above the soles of the feet — not whatever is doing the pushing.
         let obstructions = obstructing(at: candidate, in: world).filter { $0 != pusher }
