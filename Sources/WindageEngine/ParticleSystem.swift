@@ -184,6 +184,25 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
     }
 }
 
+nonisolated extension ParticleRecipe {
+    /// **This recipe as shafts of a sky's light**: leaning along the sun (``Alignment/axis``) and tinted by its light,
+    /// scaled so a high noon sun leaves the recipe's own colour about as it is — dimmer and warmer toward evening, and
+    /// gone once the sun is down, because moonlight does not make shafts.
+    ///
+    /// For a recipe that ``glows``, so the light it gives is added over the scene; a recipe that covers would darken
+    /// toward black instead of fading.
+    public func shafts(of lighting: DaySky.Lighting) -> ParticleRecipe {
+        var recipe = self
+        recipe.alignment = .axis
+        recipe.axis = lighting.direction
+        recipe.color *= lighting.elevation > 0 ? lighting.colour / Self.noonLight : .zero
+        return recipe
+    }
+
+    /// About how bright a clear noon sun's light is in ``DaySky/Lighting/colour``.
+    static let noonLight: Float = 3.2
+}
+
 /// Dust, sparks and embers: the things that say something just happened.
 ///
 /// ### Extracted, and the recipe is what changed

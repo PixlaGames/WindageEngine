@@ -124,6 +124,22 @@ struct ParticleLifeTests {
         #expect(throws: (any Error).self) { try JSONDecoder().decode(ParticleRecipe.self, from: Data("{}".utf8)) }
     }
 
+    @Test("Shafts lean along the sun, fade toward evening and are gone at night")
+    func shafts() {
+        let beam = ParticleRecipe(count: 1, speed: 0, spread: 0, lifetime: 10, size: 4, color: SIMD3(1, 0.9, 0.7),
+                                  glows: true)
+        let noonSky = DaySky(timeOfDay: 13).lighting
+        let noon = beam.shafts(of: noonSky)
+        let evening = beam.shafts(of: DaySky(timeOfDay: 17).lighting)
+        let night = beam.shafts(of: DaySky(timeOfDay: 1).lighting)
+        #expect(noon.alignment == ParticleRecipe.Alignment.axis)
+        #expect(simd_length(noon.axis - noonSky.direction) < 1e-6)
+        let before: Float = simd_length(beam.color), after: Float = simd_length(noon.color)
+        #expect(abs(after - before) < 0.6 * before)
+        #expect(simd_length(evening.color) < after)
+        #expect(night.color == SIMD3<Float>.zero)
+    }
+
     @Test("Prewarming several emitters together ages each swarm only by its own seconds")
     func prewarmTogether() {
         var system = ParticleSystem(recipes: [butterfly], capacity: 128)
