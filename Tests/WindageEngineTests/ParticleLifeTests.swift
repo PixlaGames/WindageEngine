@@ -16,7 +16,7 @@ struct ParticleLifeTests {
     private let butterfly = ParticleRecipe(count: 1, speed: 0, spread: 0, lifetime: 14, size: 0.45,
                                            gravity: 0, drag: 0.5, color: SIMD3(1, 1, 1),
                                            wander: 1.2, wanderRate: 0.25, maxSpeed: 1, spawnRadius: 3,
-                                           fadeIn: 1, flapRate: 6, sprite: 2)
+                                           fadeIn: 1, fadeOut: 1.5, flapRate: 6, sprite: 2)
 
     private func swarm(seconds: Float = 20) -> ParticleSystem {
         var system = ParticleSystem(recipes: [butterfly], capacity: 64)
@@ -72,6 +72,20 @@ struct ParticleLifeTests {
                                                             color: .one)], capacity: 1)
         still.burst(0, at: .zero, seed: 1)
         #expect(still.width(of: still.live[0]) == 1)
+    }
+
+    @Test("A fade-out keeps it solid until its last seconds, then takes it away")
+    func fadeOut() {
+        var system = ParticleSystem(recipes: [ParticleRecipe(count: 1, speed: 0, spread: 0, lifetime: 10, size: 1,
+                                                             gravity: 0, drag: 0, color: .one, fade: 0, fadeOut: 2)],
+                                    capacity: 1)
+        system.burst(0, at: .zero, seed: 1)
+        let life = system.live[0].lifetime
+        system.step(deltaTime: life * 0.5)
+        #expect(system.appearance(of: system.live[0]).coverage == 1, "faded before its last seconds")
+        system.step(deltaTime: life * 0.5 - 1)
+        let late = system.appearance(of: system.live[0]).coverage
+        #expect(abs(late - 0.5) < 0.02, "a second from the end of a two-second fade-out: \(late)")
     }
 
     @Test("A recipe survives being saved, and a file that names only a colour takes the defaults")

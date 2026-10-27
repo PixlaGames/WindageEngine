@@ -48,8 +48,11 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
     public var color: SIMD3<Float>
     /// Opacity at birth.
     public var opacity: Float = 1
-    /// How opacity falls over a lifetime: `(1 − t)^fade`. 1 is linear; 2 holds on and then goes,
-    /// which is how dust thins.
+    /// How opacity falls over a lifetime: `(1 − t)^fade`. 1 is linear; **2 thins fast and then lingers faint**, which
+    /// is how a puff of dust goes; 0 holds full opacity for the whole life — pair it with ``fadeOut``.
+    ///
+    /// > This said "2 holds on and then goes" until 2026-10-27, which is the opposite of what the curve does: at half
+    /// > its life a fade of 2 is already at a quarter. Something that should stay solid and then go wants ``fadeOut``.
     public var fade: Float = 1
 
     /// **Whether this is light or matter**, which decides how it blends.
@@ -74,6 +77,9 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
     public var spawnRadius: Float = 0
     /// Seconds it takes to appear, so nothing long-lived pops into being.
     public var fadeIn: Float = 0
+    /// **Seconds it takes to go, at the end of its life** — solid until then. What a butterfly or a leaf wants:
+    /// there, and then not, rather than ghostly for most of its life.
+    public var fadeOut: Float = 0
     /// **Wingbeats a second**: its width closes and opens this often, which is a wing flapping when the sprite is
     /// a pair of wings seen from above. 0 holds still.
     public var flapRate: Float = 0
@@ -87,7 +93,7 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
                 growth: Float = 0, gravity: Float = -6.5, drag: Float = 2.4,
                 color: SIMD3<Float>, opacity: Float = 1, fade: Float = 1, glows: Bool = false,
                 wander: Float = 0, wanderRate: Float = 0.3, maxSpeed: Float = .infinity, spawnRadius: Float = 0,
-                fadeIn: Float = 0, flapRate: Float = 0, sprite: Int? = nil) {
+                fadeIn: Float = 0, fadeOut: Float = 0, flapRate: Float = 0, sprite: Int? = nil) {
         self.storedCount = max(0, count)
         self.speed = speed
         self.spread = spread
@@ -105,6 +111,7 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
         self.maxSpeed = maxSpeed > 0 ? maxSpeed : .infinity
         self.spawnRadius = max(spawnRadius, 0)
         self.fadeIn = max(fadeIn, 0)
+        self.fadeOut = max(fadeOut, 0)
         self.flapRate = max(flapRate, 0)
         self.sprite = sprite
     }
@@ -113,7 +120,7 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
 
     private enum CodingKeys: String, CodingKey {
         case count, speed, spread, lifetime, size, growth, gravity, drag, color, opacity, fade, glows
-        case wander, wanderRate, maxSpeed, spawnRadius, fadeIn, flapRate, sprite
+        case wander, wanderRate, maxSpeed, spawnRadius, fadeIn, fadeOut, flapRate, sprite
     }
 
     /// **Saved as JSON, every field but a color optional** — a pack describes an effect in a file, and a file from
@@ -128,7 +135,7 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
                   opacity: value(.opacity, 1), fade: value(.fade, 1), glows: value(.glows, false),
                   wander: value(.wander, 0), wanderRate: value(.wanderRate, 0.3),
                   maxSpeed: value(.maxSpeed, .infinity), spawnRadius: value(.spawnRadius, 0),
-                  fadeIn: value(.fadeIn, 0), flapRate: value(.flapRate, 0),
+                  fadeIn: value(.fadeIn, 0), fadeOut: value(.fadeOut, 0), flapRate: value(.flapRate, 0),
                   sprite: (try? c.decodeIfPresent(Int.self, forKey: .sprite)) ?? nil)
     }
 
@@ -140,7 +147,7 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
         try c.encode(opacity, forKey: .opacity); try c.encode(fade, forKey: .fade); try c.encode(glows, forKey: .glows)
         try c.encode(wander, forKey: .wander); try c.encode(wanderRate, forKey: .wanderRate)
         if maxSpeed.isFinite { try c.encode(maxSpeed, forKey: .maxSpeed) }
-        try c.encode(spawnRadius, forKey: .spawnRadius); try c.encode(fadeIn, forKey: .fadeIn)
+        try c.encode(spawnRadius, forKey: .spawnRadius); try c.encode(fadeIn, forKey: .fadeIn); try c.encode(fadeOut, forKey: .fadeOut)
         try c.encode(flapRate, forKey: .flapRate); try c.encodeIfPresent(sprite, forKey: .sprite)
     }
 }
@@ -290,7 +297,8 @@ public nonisolated struct ParticleSystem: Sendable {
         let r = recipes[particle.recipe]
         let t = particle.progress
         let appearing = r.fadeIn > 0 ? min(particle.age / r.fadeIn, 1) : 1
-        let opacity = r.opacity * pow(max(0, 1 - t), r.fade) * appearing
+        let going = r.fadeOut > 0 ? min(max(particle.lifetime - particle.age, 0) / r.fadeOut, 1) : 1
+        let opacity = r.opacity * pow(max(0, 1 - t), r.fade) * appearing * going
         return (r.color * opacity, r.glows ? 0 : opacity, particle.size * (1 + r.growth * t))
     }
 
