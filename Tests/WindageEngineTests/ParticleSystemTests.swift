@@ -186,13 +186,13 @@ struct ParticleSystemTests {
         #expect(simd_distance(look.color, dust.color * look.coverage) < 1e-6)
     }
 
-    /// The renderer's instance is four `float4`s; the shader reads exactly that.
+    /// The renderer's instance is five `float4`s; the shader reads exactly that.
     @Test("The instance layout is what the shader reads")
     func instanceLayout() {
-        #expect(MemoryLayout<ParticleRenderer.Instance>.size == 64)
-        #expect(MemoryLayout<ParticleRenderer.Instance>.stride == 64)
+        #expect(MemoryLayout<ParticleRenderer.Instance>.size == 80)
+        #expect(MemoryLayout<ParticleRenderer.Instance>.stride == 80)
         #expect(MemoryLayout<ParticleRenderer.Instance>.alignment == 16)
-        #expect(MemoryLayout<ParticleRenderer.Frame>.size == 96)
+        #expect(MemoryLayout<ParticleRenderer.Frame>.size == 64)
     }
 }
 

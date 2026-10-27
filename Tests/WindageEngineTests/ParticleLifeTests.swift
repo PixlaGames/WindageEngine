@@ -16,7 +16,8 @@ struct ParticleLifeTests {
     private let butterfly = ParticleRecipe(count: 1, speed: 0, spread: 0, lifetime: 14, size: 0.45,
                                            gravity: 0, drag: 0.5, color: SIMD3(1, 1, 1),
                                            wander: 1.2, wanderRate: 0.25, maxSpeed: 1, spawnRadius: 3,
-                                           fadeIn: 1, fadeOut: 1.5, flapRate: 6, sprite: 2)
+                                           fadeIn: 1, fadeOut: 1.5, flapRate: 6, sprite: 2, aspect: 1.2,
+                                           alignment: .velocity, axis: SIMD3(0, 0, 1), stretch: 0.3)
 
     private func swarm(seconds: Float = 20) -> ParticleSystem {
         var system = ParticleSystem(recipes: [butterfly], capacity: 64)
@@ -86,6 +87,32 @@ struct ParticleLifeTests {
         system.step(deltaTime: life * 0.5 - 1)
         let late = system.appearance(of: system.live[0]).coverage
         #expect(abs(late - 0.5) < 0.02, "a second from the end of a two-second fade-out: \(late)")
+    }
+
+    @Test("Square to the view by default, as tall as its aspect, along its motion stretched by speed, and along an axis")
+    func alignments() {
+        let right = SIMD3<Float>(1, 0, 0), up = SIMD3<Float>(0, 1, 0)
+        func extent(_ recipe: ParticleRecipe, velocity: SIMD3<Float> = .zero) -> (right: SIMD3<Float>, up: SIMD3<Float>) {
+            var system = ParticleSystem(recipes: [recipe], capacity: 1)
+            system.burst(0, at: .zero, direction: velocity == .zero ? SIMD3(0, 1, 0) : velocity, seed: 1)
+            return system.extent(of: system.live[0], cameraRight: right, cameraUp: up)
+        }
+        let size: Float = 2
+        let facing = extent(ParticleRecipe(count: 1, speed: 0, spread: 0, lifetime: 9, size: size, color: .one, aspect: 1.5))
+        let s0 = facing.right.x * 2   // the burst varies size by ±30%; read the width it gave
+        #expect(facing.right.y == 0 && abs(facing.up.y - s0 * 0.75) < 1e-4, "\(facing)")
+
+        let wind = extent(ParticleRecipe(count: 1, speed: 10, spread: 0, lifetime: 9, size: size, gravity: 0, drag: 0,
+                                         color: .one, alignment: .velocity, stretch: 0.1), velocity: SIMD3(1, 0, 0))
+        #expect(abs(simd_normalize(wind.up).x) > 0.999, "a streak lies along its motion: \(wind.up)")
+        #expect(simd_length(wind.up) > simd_length(wind.right) + 0.2, "and is stretched by its speed")
+        #expect(abs(simd_dot(wind.right, wind.up)) < 1e-4)
+
+        let sun = simd_normalize(SIMD3<Float>(0.3, 1, 0.2))
+        let beam = extent(ParticleRecipe(count: 1, speed: 0, spread: 0, lifetime: 9, size: size, color: .one,
+                                         alignment: .axis, axis: sun))
+        #expect(simd_distance(simd_normalize(beam.up), sun) < 1e-4, "a shaft leans along the sun")
+        #expect(abs(simd_dot(beam.right, sun)) < 1e-4 && abs(beam.right.z) < 1e-4, "and turns to face the view")
     }
 
     @Test("A recipe survives being saved, and a file that names only a colour takes the defaults")

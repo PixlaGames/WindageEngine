@@ -48,14 +48,16 @@ public nonisolated enum ParticleRendererError: Error, CustomStringConvertible, S
 
 public final class ParticleRenderer {
 
-    /// One particle as the shader reads it. **Three `float4`s**, pinned by a test on size, stride and
-    /// alignment: the third is its atlas cell (u0, v0, du, dv), `du` 0 for a soft disc — and its width,
-    /// against its height, in `widthScale` beside it.
+    /// One particle as the shader reads it. **Five `float4`s**, pinned by a test on size, stride and
+    /// alignment: where, its colour, its atlas cell (u0, v0, du, dv; `du` 0 for a soft disc), and its two
+    /// half-edges in the world — so a quad may face the view, lie along its motion or lean along an axis.
     struct Instance {
-        var positionAndHalfSize: SIMD4<Float>
+        var position: SIMD4<Float>
         var colorAndCoverage: SIMD4<Float>
         var spriteCell: SIMD4<Float>
-        var widthScale: SIMD4<Float>
+        /// Half its width and half its height as world vectors — ``ParticleSystem/extent(of:cameraRight:cameraUp:)``.
+        var right: SIMD4<Float>
+        var up: SIMD4<Float>
     }
 
     /// The sprites' sheet, cut into cells — a recipe's ``ParticleRecipe/sprite`` names one. Nil draws every particle
@@ -65,8 +67,6 @@ public final class ParticleRenderer {
 
     struct Frame {
         var viewProjection: simd_float4x4
-        var right: SIMD4<Float>
-        var up: SIMD4<Float>
     }
 
     public let capacity: Int
@@ -205,17 +205,16 @@ public final class ParticleRenderer {
             let cell = system.recipes[particle.recipe].sprite.flatMap { sprite in
                 atlas.map { $0.rect(column: sprite % $0.columns, row: sprite / $0.columns) }
             } ?? .zero
-            instances[count] = Instance(positionAndHalfSize: SIMD4(particle.position, look.size * 0.5),
+            let (right, up) = system.extent(of: particle, cameraRight: cameraRight, cameraUp: cameraUp)
+            instances[count] = Instance(position: SIMD4(particle.position, 1),
                                         colorAndCoverage: SIMD4(lit, look.coverage),
                                         spriteCell: cell,
-                                        widthScale: SIMD4(system.width(of: particle), 0, 0, 0))
+                                        right: SIMD4(right, 0), up: SIMD4(up, 0))
             count += 1
         }
         guard count > 0 else { return 0 }
 
-        var frame = Frame(viewProjection: viewProjection,
-                          right: SIMD4(cameraRight, 0),
-                          up: SIMD4(cameraUp, 0))
+        var frame = Frame(viewProjection: viewProjection)
         let frameOffset = ParticleRenderer.frameStride * frameSlot
         frameBuffer.contents().advanced(by: frameOffset)
             .copyMemory(from: &frame, byteCount: MemoryLayout<Frame>.size)

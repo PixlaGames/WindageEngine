@@ -86,6 +86,27 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
     /// The atlas cell it is drawn with — ``ParticleRenderer``'s texture — or nil for a soft disc.
     public var sprite: Int?
 
+    // MARK: Shafts and streaks (2026-10-27)
+
+    /// **Which way its height runs.**
+    public enum Alignment: String, Sendable, Codable {
+        /// Square to the view: a mote, a butterfly, a spark.
+        case camera
+        /// Along its own motion, longer the faster it goes (``stretch``): a gust of wind, a streak of rain.
+        case velocity
+        /// Along ``axis`` in the world, turned about it to face the view: a shaft of sunlight leaning from the sun.
+        case axis
+    }
+
+    /// How tall it is against how wide: 1 square, 1.5 a shaft half as tall again as it is wide.
+    public var aspect: Float = 1
+    public var alignment: Alignment = .camera
+    /// The world direction an ``Alignment/axis`` particle's height runs along — toward the sun, for a sunbeam. A game sets
+    /// it when the light changes.
+    public var axis: SIMD3<Float> = SIMD3(0, 1, 0)
+    /// Seconds of its own motion added to a ``Alignment/velocity`` particle's length: at 10 m/s, 0.1 is another metre.
+    public var stretch: Float = 0
+
     private var storedCount: Int
     private var storedLifetime: Float
 
@@ -93,7 +114,9 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
                 growth: Float = 0, gravity: Float = -6.5, drag: Float = 2.4,
                 color: SIMD3<Float>, opacity: Float = 1, fade: Float = 1, glows: Bool = false,
                 wander: Float = 0, wanderRate: Float = 0.3, maxSpeed: Float = .infinity, spawnRadius: Float = 0,
-                fadeIn: Float = 0, fadeOut: Float = 0, flapRate: Float = 0, sprite: Int? = nil) {
+                fadeIn: Float = 0, fadeOut: Float = 0, flapRate: Float = 0, sprite: Int? = nil,
+                aspect: Float = 1, alignment: Alignment = .camera, axis: SIMD3<Float> = SIMD3(0, 1, 0),
+                stretch: Float = 0) {
         self.storedCount = max(0, count)
         self.speed = speed
         self.spread = spread
@@ -114,6 +137,10 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
         self.fadeOut = max(fadeOut, 0)
         self.flapRate = max(flapRate, 0)
         self.sprite = sprite
+        self.aspect = aspect > 0 && aspect.isFinite ? aspect : 1
+        self.alignment = alignment
+        self.axis = simd_length_squared(axis) > 0 ? simd_normalize(axis) : SIMD3(0, 1, 0)
+        self.stretch = max(stretch, 0)
     }
 
     // MARK: Saved
@@ -121,6 +148,7 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case count, speed, spread, lifetime, size, growth, gravity, drag, color, opacity, fade, glows
         case wander, wanderRate, maxSpeed, spawnRadius, fadeIn, fadeOut, flapRate, sprite
+        case aspect, alignment, axis, stretch
     }
 
     /// **Saved as JSON, every field but a color optional** — a pack describes an effect in a file, and a file from
@@ -136,7 +164,9 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
                   wander: value(.wander, 0), wanderRate: value(.wanderRate, 0.3),
                   maxSpeed: value(.maxSpeed, .infinity), spawnRadius: value(.spawnRadius, 0),
                   fadeIn: value(.fadeIn, 0), fadeOut: value(.fadeOut, 0), flapRate: value(.flapRate, 0),
-                  sprite: (try? c.decodeIfPresent(Int.self, forKey: .sprite)) ?? nil)
+                  sprite: (try? c.decodeIfPresent(Int.self, forKey: .sprite)) ?? nil,
+                  aspect: value(.aspect, 1), alignment: value(.alignment, .camera), axis: value(.axis, SIMD3(0, 1, 0)),
+                  stretch: value(.stretch, 0))
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -149,6 +179,8 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
         if maxSpeed.isFinite { try c.encode(maxSpeed, forKey: .maxSpeed) }
         try c.encode(spawnRadius, forKey: .spawnRadius); try c.encode(fadeIn, forKey: .fadeIn); try c.encode(fadeOut, forKey: .fadeOut)
         try c.encode(flapRate, forKey: .flapRate); try c.encodeIfPresent(sprite, forKey: .sprite)
+        try c.encode(aspect, forKey: .aspect); try c.encode(alignment, forKey: .alignment)
+        try c.encode(axis, forKey: .axis); try c.encode(stretch, forKey: .stretch)
     }
 }
 
@@ -302,6 +334,35 @@ public nonisolated struct ParticleSystem: Sendable {
         return (r.color * opacity, r.glows ? 0 : opacity, particle.size * (1 + r.growth * t))
     }
 
+    /// **The two half-edges of its quad in the world** — right and up from its centre — for its size now, its wingbeat,
+    /// its aspect and its alignment, seen with the view's right and up. A renderer places the corners from these.
+    public func extent(of particle: Particle, cameraRight: SIMD3<Float>, cameraUp: SIMD3<Float>)
+        -> (right: SIMD3<Float>, up: SIMD3<Float>) {
+        let r = recipes[particle.recipe]
+        let half = appearance(of: particle).size * 0.5
+        let width = half * width(of: particle)
+        var height = half * r.aspect
+        var along: SIMD3<Float>
+        switch r.alignment {
+        case .camera:
+            return (cameraRight * width, cameraUp * height)
+        case .velocity:
+            let speed = simd_length(particle.velocity)
+            guard speed > 1e-4 else { return (cameraRight * width, cameraUp * height) }
+            along = particle.velocity / speed
+            height += speed * r.stretch * 0.5
+        case .axis:
+            along = r.axis
+        }
+        // Turned about its own length to face the view as nearly as it can: across is square to both the length and
+        // the view's line of sight. Looked at end-on there is no such direction, and the view's right stands in.
+        let sight = simd_cross(cameraUp, cameraRight)
+        var across = simd_cross(along, sight)
+        let length = simd_length(across)
+        across = length > 1e-3 ? across / length : cameraRight
+        return (across * width, along * height)
+    }
+
     /// **How wide it is drawn against its size, 0…1** — a wingbeat for a recipe that flaps, else 1. The width closes
     /// to a quarter and opens again: a pair of wings seen from above, beating.
     public func width(of particle: Particle) -> Float {
@@ -391,12 +452,16 @@ public nonisolated struct ParticleEmitter: Sendable {
 
     /// **Prewarms every emitter feeding one system together** — one after another would age the first one's
     /// particles through every later one's prewarm too. `origins[i]` is where `emitters[i]` is.
+    /// `directions[i]`, when given, is the way `emitters[i]` throws — the wind's heading for a gust.
     public static func prewarm(_ emitters: inout [ParticleEmitter], at origins: [SIMD3<Float>],
+                               directions: [SIMD3<Float>]? = nil,
                                into system: inout ParticleSystem, seconds: Float, step: Float = 1.0 / 30) {
-        guard seconds > 0, step > 0, emitters.count == origins.count else { return }
+        guard seconds > 0, step > 0, emitters.count == origins.count,
+              directions == nil || directions?.count == origins.count else { return }
         for _ in 0..<Int((seconds / step).rounded(.up)) {
             for index in emitters.indices {
-                emitters[index].emit(into: &system, at: origins[index], deltaTime: step)
+                emitters[index].emit(into: &system, at: origins[index], direction: directions?[index] ?? SIMD3(0, 1, 0),
+                                     deltaTime: step)
             }
             system.step(deltaTime: step)
         }
