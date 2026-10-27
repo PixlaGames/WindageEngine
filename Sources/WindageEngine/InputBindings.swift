@@ -491,6 +491,22 @@ public nonisolated struct PlayerSettings: Sendable, Equatable, Codable {
         didSet { ambienceVolume = PlayerSettings.clamp(ambienceVolume, 0...1, 1) }
     }
 
+    /// One-shots — a shot, a blow, a footstep, a button — 0…1, under ``volume``: ``AudioEngine/effectsVolume``.
+    public var effectsVolume: Float = 1 {
+        didSet { effectsVolume = PlayerSettings.clamp(effectsVolume, 0...1, 1) }
+    }
+
+    /// The score, 0…1, under ``volume``: a ``MusicPlayer``'s. **Below the effects by default** — a score
+    /// at the level of a sword drowns the fight it is scoring.
+    public var musicVolume: Float = 0.45 {
+        didSet { musicVolume = PlayerSettings.clamp(musicVolume, 0...1, 0.45) }
+    }
+
+    /// Whether the game is heard while it is not the front app. **Off by default**: a game is not a music
+    /// player, and sound still playing over whatever the player switched to is noise. On for the second
+    /// monitor with the world on it.
+    public var soundInBackground = false
+
     /// Stops added to the game's own exposure. **The player's dial on top of the game's**, so a level
     /// authored at −0.5 stays −0.5 relative to itself, and a player on a dim screen lifts all of them.
     public var brightness: Float = 0 {
@@ -526,6 +542,7 @@ public nonisolated struct PlayerSettings: Sendable, Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case bindings, padBindings, mouseSensitivity, stickSensitivity, invertMouse, invertStick
         case moveDeadzone, lookDeadzone, volume, ambienceVolume, brightness, padCalibration
+        case effectsVolume, musicVolume, soundInBackground
         case headBobAmount = "headBob"
         /// Read, never written: one sensitivity and one invert for both devices, before 2026-09-11.
         case lookSensitivity, invertLook
@@ -562,6 +579,11 @@ public nonisolated struct PlayerSettings: Sendable, Equatable, Codable {
         brightness = PlayerSettings.clamp(
             (try? c.decodeIfPresent(Float.self, forKey: .brightness)) ?? 0, PlayerSettings.brightnessRange, 0)
         padCalibration = (try? c.decodeIfPresent(PadCalibration.self, forKey: .padCalibration)) ?? .unmeasured
+        effectsVolume = PlayerSettings.clamp(
+            (try? c.decodeIfPresent(Float.self, forKey: .effectsVolume)) ?? 1, 0...1, 1)
+        musicVolume = PlayerSettings.clamp(
+            (try? c.decodeIfPresent(Float.self, forKey: .musicVolume)) ?? 0.45, 0...1, 0.45)
+        soundInBackground = (try? c.decodeIfPresent(Bool.self, forKey: .soundInBackground)) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -579,5 +601,8 @@ public nonisolated struct PlayerSettings: Sendable, Equatable, Codable {
         try c.encode(ambienceVolume, forKey: .ambienceVolume)
         try c.encode(brightness, forKey: .brightness)
         try c.encode(padCalibration, forKey: .padCalibration)
+        try c.encode(effectsVolume, forKey: .effectsVolume)
+        try c.encode(musicVolume, forKey: .musicVolume)
+        try c.encode(soundInBackground, forKey: .soundInBackground)
     }
 }
