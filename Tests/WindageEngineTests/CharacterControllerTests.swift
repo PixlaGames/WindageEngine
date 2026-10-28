@@ -354,6 +354,31 @@ struct CharacterFootingTests {
         #expect(c.feet.x > 3, "not carried: \(c.feet)")
     }
 
+    /// **No sideways drift after touchdown** (2026-10-28): a body moving through the air lands where the parabola meets
+    /// the ground, not a step's drift past it — off the sample's piston, 30 and 240 steps a second came down 2.5 cm apart.
+    @Test("A body carried through the air lands in the same place at 30 and 240 steps a second")
+    func airDriftLandsRateIndependently() {
+        func landed(stepsPerSecond: Float) -> SIMD3<Float> {
+            let dt = 1 / stepsPerSecond
+            // Standing on a platform moving +x at 3 m/s, which stops when the body jumps.
+            var c = CharacterController(feet: SIMD3(0, 0.5, 0))
+            var platform = CharacterController.Surroundings.Solid(bounds: BoundingBox(minimum: SIMD3(-1, 0, -1), maximum: SIMD3(1, 0.5, 1)))
+            for _ in 0..<Int((0.2 / dt).rounded()) { c.step(yaw: 0, input: MovementInput(), deltaTime: dt, in: .init(solids: [platform])) }
+            // The jump is pressed in the step that starts at exactly half a second at either rate, the platform moving
+            // through it and stopped after, so both leave at the same moment with the same speed.
+            let jump = Int((0.5 / dt).rounded())
+            for i in 0..<Int((2 / dt).rounded()) {
+                platform.motion = i <= jump ? SIMD3(3 * dt, 0, 0) : .zero
+                platform.bounds = BoundingBox(minimum: platform.bounds.minimum + platform.motion, maximum: platform.bounds.maximum + platform.motion)
+                c.step(yaw: 0, input: MovementInput(), isJumpHeld: i == jump, deltaTime: dt, in: .init(solids: [platform]))
+            }
+            return c.feet
+        }
+        let coarse = landed(stepsPerSecond: 30), fine = landed(stepsPerSecond: 240)
+        #expect(coarse.y == fine.y, "landed at different heights: \(coarse.y), \(fine.y)")
+        #expect(abs(coarse.x - fine.x) < 0.01, "30 steps a second came down at x \(coarse.x), 240 at \(fine.x)")
+    }
+
     /// **Walking off an edge falls**, and lands on whatever is below.
     @Test("Walking off something taller than a step falls, and lands")
     func fallsOffAnEdge() {
@@ -1221,6 +1246,31 @@ struct CharacterTurntableTests {
             strides += c.events.filter { if case .stride = $0 { true } else { false } }.count
         }
         return (c, center, total, strides)
+    }
+
+    /// **Walking across turning ground ends in one place at any step rate** (2026-10-28): the view turns with the table
+    /// after each step, as a game turns it, and a step walks halfway through its turn. Walked along the view's direction
+    /// from before the turn, 30 and 240 steps a second ended 5 cm and 6° apart on the sample's turntable.
+    @Test("Walking across a turning table ends in the same place at 30 and 240 steps a second")
+    func walkingOnATurningTableIsRateIndependent() {
+        func walked(stepsPerSecond: Float) -> SIMD3<Float> {
+            let dt = 1 / stepsPerSecond, center = SIMD2<Float>(0, 0)
+            // On the table the whole way — half a metre from its centre, a metre and a half across a four-metre table.
+            var c = CharacterController(feet: SIMD3(0.5, 0.2, 0))
+            var yaw: Float = 0
+            // Standing on it first: the step a body arrives is not carried, which is right, and not what this measures.
+            let still = CharacterController.Surroundings(solids: boxes([table(at: center)]))
+            for _ in 0..<Int((0.2 / dt).rounded()) { c.step(yaw: 0, input: MovementInput(), deltaTime: dt, in: still) }
+            for _ in 0..<Int((1.0 / dt).rounded()) {
+                var world = CharacterController.Surroundings(solids: boxes([table(at: center)]))
+                world.solids[0].turn = .init(about: center, by: 1.2 * dt)
+                c.step(yaw: yaw, input: MovementInput(forward: 0.25), deltaTime: dt, in: world)
+                yaw += c.turned
+            }
+            return c.feet
+        }
+        let coarse = walked(stepsPerSecond: 30), fine = walked(stepsPerSecond: 240)
+        #expect(simd_distance(coarse, fine) < 0.01, "30 steps a second ended at \(coarse), 240 at \(fine)")
     }
 
     @Test("A quarter turn carries the feet a quarter turn round the centre, at the same radius")

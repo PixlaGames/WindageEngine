@@ -703,9 +703,16 @@ public nonisolated struct CharacterController: Sendable {
         isCrouchForced = !crouching && standingRoom(in: world) < tuning.eyeHeight - 1e-4
         let crouched = crouching || isCrouchForced
 
-        // --- Direction on the ground plane, from yaw alone.
-        let forward = SIMD2<Float>(-sin(yaw), -cos(yaw))
-        let right = SIMD2<Float>(cos(yaw), -sin(yaw))
+        // --- Direction on the ground plane, from yaw alone — **turned by this step's turn**, on ground that turns
+        // (2026-10-28). The carry above has already turned the body with the table, and the game turns the view by
+        // ``turned`` after the step; walking along the yaw it passed walked the whole step the way the view faced
+        // *before* the table turned — every step a little behind the table, further the coarser the steps: 5 cm and 6°
+        // apart between 30 and 240 steps a second crossing the sample's turntable. Along the view as it is after the
+        // turn, a body walks a straight line across the table, as it should, at any rate. (Halfway through the turn was
+        // tried first, and halved the error rather than ending it: the carry comes before the walk.)
+        let heading = yaw + turned
+        let forward = SIMD2<Float>(-sin(heading), -cos(heading))
+        let right = SIMD2<Float>(cos(heading), -sin(heading))
         var direction = forward * input.forward + right * input.strafe
         let lengthSquared = simd_length_squared(direction)
         // **Clamped to 1, not normalised**, so holding two directions at once is not faster than one —
@@ -1293,6 +1300,19 @@ public nonisolated struct CharacterController: Sendable {
                 // sample at 120, the drop off the ruins' landing read 7.0 m/s where it is 6.9.
                 let atGround = (rising * rising + 2 * tuning.gravity * max(0, feet.y - support)).squareRoot()
                 events.append(.landed(impactSpeed: atGround))
+                // **No sideways drift after touchdown** (2026-10-28). The air's sideways travel was taken for the whole
+                // step, and contact is somewhere inside it: a body shoved through the air came down as much as a step's
+                // drift further on at coarse rates — 2.5 cm between 30 and 240 steps a second off the sample's piston.
+                // The contact's moment has an exact answer, the same parabola as the speed above; the travel after it
+                // is taken back, through collision, along the way it came.
+                if airVelocity != .zero, tuning.gravity > 0 {
+                    let contact = (rising + atGround) / tuning.gravity
+                    let after = max(0, dt - contact)
+                    if after > 0 {
+                        move(along: SIMD3(-airVelocity.x * after, 0, 0), in: world)
+                        move(along: SIMD3(0, 0, -airVelocity.y * after), in: world)
+                    }
+                }
                 // **A kick, not a position**: the spring's velocity is what the landing sets, so the
                 // eye travels down to its lowest rather than teleporting there. For a critically
                 // damped spring from rest, an initial rate of ω·e·s peaks at exactly s.
