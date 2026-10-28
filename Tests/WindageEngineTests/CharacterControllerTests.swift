@@ -311,6 +311,49 @@ struct CharacterFootingTests {
         #expect(c.feet.z > -1 + c.tuning.radius - 1e-3)
     }
 
+    /// **A world of many solids walks as a world of the few near the body.** Each step looks only at the solids it can
+    /// reach; this holds that to the answer every solid gave — a course over a ledge, a crate and a wall at an angle,
+    /// alone and among four thousand boxes standing round it further off, ends at the same feet to the bit.
+    @Test("Thousands of solids out of reach change nothing")
+    func distantSolidsChangeNothing() {
+        let near = [ledge(height: 0.3, ahead: 2, depth: 3), ledge(height: 1.5, ahead: 9),
+                    BoundingBox(minimum: SIMD3(4, 0, -12), maximum: SIMD3(5, 3, 0))]
+        var far: [BoundingBox] = []
+        for i in 0..<64 {
+            for j in 0..<64 where abs(i - 32) > 4 || abs(j - 32) > 4 {
+                let x = Float(i - 32) * 12, z = Float(j - 32) * 12
+                far.append(BoundingBox(minimum: SIMD3(x, 0, z), maximum: SIMD3(x + 2, 2, z + 2)))
+            }
+        }
+        var alone = CharacterController(feet: .zero), crowded = alone
+        let few = CharacterController.Surroundings(solids: boxes(near))
+        let many = CharacterController.Surroundings(solids: boxes(far.prefix(2000) + near + far.dropFirst(2000)))
+        for input in [MovementInput(forward: 1, isSprinting: true), MovementInput(forward: 1, strafe: 1)] {
+            run(&alone, seconds: 1.5, input, in: few)
+            run(&crowded, seconds: 1.5, input, in: many)
+        }
+        #expect(alone.feet == crowded.feet, "\(alone.feet) alone, \(crowded.feet) among the rest")
+        #expect(alone.feet.z < -1, "the course went nowhere: \(alone.feet)")
+    }
+
+    /// **A carry reaches as far as it goes**: a platform moving six metres in one step still takes the body with it,
+    /// and still stops it at a wall that far off.
+    @Test("A fast carry still meets what it carries the body into")
+    func fastCarryMeetsWalls() {
+        // Thicker than the carry: a move is tested where it ends, so a wall thinner than one step's travel is not this
+        // test's question. Four metres off, it is well past what a step reaches without the carry.
+        let wall = BoundingBox(minimum: SIMD3(4, 0, -3), maximum: SIMD3(10, 3, 3))
+        var platform = CharacterController.Surroundings.Solid(bounds: BoundingBox(minimum: SIMD3(-2, 0, -2), maximum: SIMD3(2, 0.2, 2)))
+        var c = CharacterController(feet: SIMD3(0, 0.2, 0))
+        c.step(yaw: 0, input: MovementInput(), deltaTime: step, in: .init(solids: [platform] + boxes([wall])))
+        #expect(c.groundSolid == 0)
+        platform.motion = SIMD3(6, 0, 0)
+        platform.bounds = BoundingBox(minimum: platform.bounds.minimum + platform.motion, maximum: platform.bounds.maximum + platform.motion)
+        c.step(yaw: 0, input: MovementInput(), deltaTime: step, in: .init(solids: [platform] + boxes([wall])))
+        #expect(c.feet.x <= 4 - c.tuning.radius + 1e-3, "carried through the wall: \(c.feet)")
+        #expect(c.feet.x > 3, "not carried: \(c.feet)")
+    }
+
     /// **Walking off an edge falls**, and lands on whatever is below.
     @Test("Walking off something taller than a step falls, and lands")
     func fallsOffAnEdge() {

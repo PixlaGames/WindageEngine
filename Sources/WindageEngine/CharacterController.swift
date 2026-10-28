@@ -480,6 +480,11 @@ public nonisolated struct CharacterController: Sendable {
     public private(set) var nextFoot: Foot = .left
     private var wasMoving = false
 
+    /// **The solids this step can reach**, by index, gathered once at the start of ``step(yaw:input:isJumpHeld:isCrouching:deltaTime:in:)``:
+    /// every test the step makes — what is in the way, underfoot, overhead, pushing — looks at these and no others. A
+    /// world of eight thousand boulders tested whole, several times a step, cost two milliseconds a step.
+    private var near: [Int] = []
+
     public init(feet: SIMD3<Float>, tuning: Tuning = Tuning()) {
         self.tuning = tuning
         self.feet = feet
@@ -605,6 +610,7 @@ public nonisolated struct CharacterController: Sendable {
                               in world: Surroundings) {
         let dt = max(deltaTime, 0)
         events.removeAll(keepingCapacity: true)
+        near = nearbySolids(in: world, deltaTime: dt)
 
         // --- Carried by whatever is underfoot, if it moved. First, so everything after — walking,
         // footsteps, the bob — is relative to it.
@@ -817,6 +823,40 @@ public nonisolated struct CharacterController: Sendable {
         if simd_length_squared(direction) > 0 { lastDirection = direction }
     }
 
+    // MARK: - Nearby
+
+    /// Every solid whose box, seen from above, comes within this step's reach of the feet — **in index order**, so
+    /// everything the step finds among them is found in the order a test of every solid found it.
+    ///
+    /// **The reach is everything a step can move the body**, with room to spare: the body's radius, a metre, whatever
+    /// carries it (the ground solid's slide, and the arc of its turn), and twice the fastest it can go on its own or in
+    /// the air. A solid pushing into the body is one whose box, where it is now, overlaps the body — well inside.
+    private func nearbySolids(in world: Surroundings, deltaTime dt: Float) -> [Int] {
+        var carry: Float = 0
+        if let solid = groundSolid, world.solids.indices.contains(solid) {
+            carry = simd_length(world.solids[solid].motion)
+            if let turn = world.solids[solid].turn {
+                carry += abs(turn.angle) * simd_distance(turn.center, SIMD2(feet.x, feet.z))
+            }
+        }
+        let fastest = max(tuning.sprintSpeed, tuning.walkSpeed) * 2 + simd_length(airVelocity)
+        let reach = tuning.radius + 1 + carry + fastest * dt
+        let low = SIMD2(feet.x - reach, feet.z - reach), high = SIMD2(feet.x + reach, feet.z + reach)
+        var found: [Int] = []
+        // A plain loop over the buffer: in a Debug build, iterating the array itself is most of the cost.
+        world.solids.withUnsafeBufferPointer { solids in
+            var index = 0
+            while index < solids.count {
+                let box = solids[index].bounds
+                if box.maximum.x >= low.x, box.minimum.x <= high.x, box.maximum.z >= low.y, box.minimum.z <= high.y {
+                    found.append(index)
+                }
+                index += 1
+            }
+        }
+        return found
+    }
+
     // MARK: - Across
 
     private mutating func move(along delta: SIMD3<Float>, in world: Surroundings, sliding: Bool = true,
@@ -955,7 +995,7 @@ public nonisolated struct CharacterController: Sendable {
         let underfoot = isGrounded ? groundSolid : nil
         let t = CharacterController.contactTolerance
         var pushedBy = SIMD2<Float>.zero
-        for index in world.solids.indices where index != underfoot {
+        for index in near where index != underfoot {
             let going = displacement(of: index, at: feet, in: world)
             guard going != .zero, obstructing(at: feet, in: world).contains(index) else { continue }
             let solid = world.solids[index]
@@ -1133,7 +1173,8 @@ public nonisolated struct CharacterController: Sendable {
         let t = CharacterController.contactTolerance
         var lowest = Float.greatestFiniteMagnitude
         let at = SIMD2(feet.x, feet.z)
-        for (index, solid) in world.solids.enumerated() {
+        for index in near {
+            let solid = world.solids[index]
             // **With the collision test's own tolerance**, or a body resting against a beam's face —
             // which the walk allows to within a hair — counts it as overhead. The first version did,
             // and walking up to the ruins' lintel standing pushed the player into a crouch.
@@ -1152,7 +1193,7 @@ public nonisolated struct CharacterController: Sendable {
     private func obstructing(at position: SIMD3<Float>, in world: Surroundings) -> [Int] {
         let t = CharacterController.contactTolerance
         let top = position.y + tuning.bodyHeight(for: eyeHeight), at = SIMD2(position.x, position.z)
-        return world.solids.indices.filter { index in
+        return near.filter { index in
             let solid = world.solids[index]
             return top > solid.bounds.minimum.y + t && solid.bounds.maximum.y > position.y + t
                 && depth(at: at, into: plan(of: index, in: world)) > t
@@ -1291,10 +1332,11 @@ public nonisolated struct CharacterController: Sendable {
             else if floor > highest { highest = floor }
         }
         let at = SIMD2(position.x, position.z)
-        for (index, solid) in world.solids.enumerated()
-        where solid.bounds.maximum.y <= limit + CharacterController.contactTolerance
-            && solid.bounds.maximum.y > highest
-            && depth(at: at, into: plan(of: index, in: world)) > 0 {
+        for index in near {
+            let solid = world.solids[index]
+            guard solid.bounds.maximum.y <= limit + CharacterController.contactTolerance
+                && solid.bounds.maximum.y > highest
+                && depth(at: at, into: plan(of: index, in: world)) > 0 else { continue }
             highest = solid.bounds.maximum.y
             which = index
         }
@@ -1308,9 +1350,10 @@ public nonisolated struct CharacterController: Sendable {
         let at = SIMD2(position.x, position.z)
         var lowest = world.meshes?.ceiling(x: position.x, z: position.z,
                                            above: head - CharacterController.contactTolerance, below: top)
-        for (index, solid) in world.solids.enumerated()
-        where solid.bounds.minimum.y >= head - CharacterController.contactTolerance && solid.bounds.minimum.y < top
-            && depth(at: at, into: plan(of: index, in: world)) > 0 {
+        for index in near {
+            let solid = world.solids[index]
+            guard solid.bounds.minimum.y >= head - CharacterController.contactTolerance && solid.bounds.minimum.y < top
+                && depth(at: at, into: plan(of: index, in: world)) > 0 else { continue }
             lowest = min(lowest ?? .greatestFiniteMagnitude, solid.bounds.minimum.y)
         }
         return lowest
