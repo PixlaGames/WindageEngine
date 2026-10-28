@@ -69,6 +69,25 @@ public nonisolated struct GraphicsSettings: Equatable, Sendable, Codable {
         }
     }
 
+    /// **How large textures are loaded: whole, or each side halved once or twice** (2026-10-28) — Unity's texture quality
+    /// (its global mipmap limit), the row every graphics menu has. A texture is loaded as its own smaller mip level would be,
+    /// so nothing at full size reaches the GPU (``TextureStore/quality``). A 4096² atlas held uncompressed with its mips is
+    /// 85 MB; at half, 21; a map's 64 of them came to 3.5 GB of an editor's 4.7.
+    public enum TextureQuality: String, CaseIterable, Sendable, Codable {
+        case full
+        case half
+        case quarter
+
+        /// How many times each side is halved.
+        public var reduction: Int {
+            switch self {
+            case .full: 0
+            case .half: 1
+            case .quarter: 2
+            }
+        }
+    }
+
     public var shadows: Shadows = .high
     /// How far scattered things are drawn, as a share of each kind's own distance (``drawDistanceRange``).
     public var drawDistance: Float = 1
@@ -84,6 +103,7 @@ public nonisolated struct GraphicsSettings: Equatable, Sendable, Codable {
     /// (``OpaqueTextures``), as ESO's and FFXIV's water settings switch them. A game that has none ignores it. About 2 ms
     /// at 1960×1490 with a pond filling the view; off, a surface reflects only the sky's gradient.
     public var reflections = true
+    public var textureQuality: TextureQuality = .full
 
     public static let drawDistanceRange: ClosedRange<Float> = 0.5...1
     public static let plantDensityRange: ClosedRange<Float> = 0.25...1
@@ -103,6 +123,7 @@ public nonisolated struct GraphicsSettings: Equatable, Sendable, Codable {
         frameRate = (try? c.decodeIfPresent(Int.self, forKey: .frameRate)) ?? d.frameRate
         antiAliasing = (try? c.decodeIfPresent(Int.self, forKey: .antiAliasing)) ?? d.antiAliasing
         reflections = (try? c.decodeIfPresent(Bool.self, forKey: .reflections)) ?? d.reflections
+        textureQuality = (try? c.decodeIfPresent(TextureQuality.self, forKey: .textureQuality)) ?? d.textureQuality
     }
 
     /// **Clamped where it is used**, so a stale saved value cannot ask for something the screen never offers.
@@ -129,7 +150,7 @@ public nonisolated struct GraphicsSettings: Equatable, Sendable, Codable {
         case low, medium, high
 
         /// The engine's presets: High is the defaults; Medium near shadows, 2×, a little less far and thick; Low no
-        /// shadows, no anti-aliasing, half the ground cover, the scene at 75% and no reflections. Measured in a dense wood at
+        /// shadows, no anti-aliasing, half the ground cover, the scene at 75%, no reflections and textures at half. Measured in a dense wood at
         /// 1960×1490 (Debug): 25.7, 18.6 and 9.2 ms.
         public var settings: GraphicsSettings {
             var s = GraphicsSettings()
@@ -148,6 +169,7 @@ public nonisolated struct GraphicsSettings: Equatable, Sendable, Codable {
                 s.plantDensity = 0.5
                 s.renderScale = .threeQuarters
                 s.reflections = false
+                s.textureQuality = .half
             }
             return s
         }
@@ -168,7 +190,8 @@ public nonisolated struct GraphicsSettings: Equatable, Sendable, Codable {
         }
         return "shadows \(shadows.rawValue), draw \(Int((drawDistance * 100).rounded()))%, "
             + "ground cover \(Int((plantDensity * 100).rounded()))%, scale \(scale), "
-            + "\(antiAliasing)× anti-aliasing, reflections \(reflections ? "on" : "off"), \(frameRate) fps"
+            + "\(antiAliasing)× anti-aliasing, reflections \(reflections ? "on" : "off"), "
+            + "textures \(textureQuality.rawValue), \(frameRate) fps"
     }
 
     // MARK: Ground cover

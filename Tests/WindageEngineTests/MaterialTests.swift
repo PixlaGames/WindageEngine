@@ -5,6 +5,7 @@
 
 import Testing
 import Foundation
+import Metal
 import ModelIO
 import simd
 @testable import WindageEngine
@@ -221,4 +222,26 @@ struct MaterialTests {
         #expect(restored[1].alphaCutoff == nil)
         #expect(restored[2].alphaCutoff == nil)
     }
+}
+
+/// **A file's maps come through ``MeshLoader`` as URLs without Model I/O decoding them** (2026-10-28): the loader
+/// used to call `MDLAsset.loadTextures()`, which decoded every image the file names into memory nobody read —
+/// for a scene's props sharing one texture sheet, the same sheet decoded once per prop.
+@Test("MeshLoader finds a file's maps without decoding them", arguments: [("textured-quad", "usda"), ("textured-quad-packed", "usdz")])
+func meshLoaderFindsMapsWithoutDecodingThem(resource: String, ext: String) throws {
+    guard let device = MTLCreateSystemDefaultDevice() else { return }
+    let url = try #require(Bundle.module.url(forResource: resource, withExtension: ext))
+    let layout = MTLVertexDescriptor()
+    layout.attributes[0].format = .float3; layout.attributes[0].offset = 0; layout.attributes[0].bufferIndex = 0
+    layout.attributes[1].format = .float3; layout.attributes[1].offset = 12; layout.attributes[1].bufferIndex = 0
+    layout.attributes[2].format = .float2; layout.attributes[2].offset = 24; layout.attributes[2].bufferIndex = 0
+    layout.layouts[0].stride = 32
+    let loaded = try MeshLoader.load(url: url, device: device, vertexDescriptor: layout,
+                                     semantics: [0: MDLVertexAttributePosition, 1: MDLVertexAttributeNormal,
+                                                 2: MDLVertexAttributeTextureCoordinate])
+    let mesh = try #require(loaded.first)
+    let source = try #require(mesh.materials.first?.textures[.baseColor])
+    guard case .url(let map) = source else { Issue.record("base colour did not come through as a file"); return }
+    let name = map.fragment(percentEncoded: false) ?? map.lastPathComponent
+    #expect(name.hasSuffix("material-map.png"))
 }

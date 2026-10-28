@@ -27,7 +27,7 @@ struct GraphicsSettingsTests {
         #expect(GraphicsSettings().summary == "High, 60 fps")
         var own = GraphicsSettings.Preset.medium.settings
         own.renderScale = .threeQuarters
-        #expect(own.summary == "shadows low, draw 80%, ground cover 75%, scale ¾, 2× anti-aliasing, reflections on, 60 fps")
+        #expect(own.summary == "shadows low, draw 80%, ground cover 75%, scale ¾, 2× anti-aliasing, reflections on, textures full, 60 fps")
     }
 
     @Test("Saved settings that ask for more or less than the screen offers are brought back in range")
@@ -101,5 +101,17 @@ struct GraphicsSettingsTests {
         #expect(GraphicsSettings.Preset.medium.settings.reflections && GraphicsSettings.Preset.high.settings.reflections)
         let older = try JSONDecoder().decode(GraphicsSettings.self, from: Data(#"{"shadows": "low", "antiAliasing": 2}"#.utf8))
         #expect(older.reflections && older.shadows == .low)
+    }
+
+    @Test func textureQualityIsFullUnlessAskedAndLowHalvesIt() throws {
+        #expect(GraphicsSettings().textureQuality == .full && GraphicsSettings.Preset.medium.settings.textureQuality == .full)
+        #expect(GraphicsSettings.Preset.low.settings.textureQuality == .half)
+        #expect(GraphicsSettings.TextureQuality.quarter.reduction == 2)
+        // A set saved before the setting existed keeps full.
+        let older = try JSONDecoder().decode(GraphicsSettings.self, from: Data(#"{"shadows": "low"}"#.utf8))
+        #expect(older.textureQuality == .full)
+        var halved = GraphicsSettings()
+        halved.textureQuality = .half
+        #expect(try JSONDecoder().decode(GraphicsSettings.self, from: JSONEncoder().encode(halved)).textureQuality == .half)
     }
 }

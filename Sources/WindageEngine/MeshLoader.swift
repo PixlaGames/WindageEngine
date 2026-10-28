@@ -104,8 +104,11 @@ public nonisolated enum MeshLoader {
         // not have is filled with zeroes, which is a degenerate basis rather than a missing one.
         // Tangents have to be generated while the mesh still has its own layout, so the descriptor is
         // applied afterwards.
+        // **Textures are not loaded here.** `MDLAsset.loadTextures()` decodes every image the file names, and nothing
+        // reads what it decodes: a ``Material`` keeps each map's URL (`textureSource`) and ``TextureStore`` loads the
+        // file once, however many meshes name it. Called for every file, it decoded the same shared texture sheet
+        // again for each of a scene's props — nine tenths of loading a scene of a few hundred.
         let asset = MDLAsset(url: url, vertexDescriptor: nil, bufferAllocator: allocator)
-        asset.loadTextures()
         return try meshes(in: asset, imported: [:], named: name, device: device, modelDescriptor: modelDescriptor,
                           semantics: semantics, reportingTo: report)
     }

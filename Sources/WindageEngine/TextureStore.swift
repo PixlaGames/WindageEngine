@@ -6,6 +6,7 @@
 import Foundation
 import Metal
 import MetalKit
+import ImageIO
 import simd
 
 public enum TextureStoreError: Error, CustomStringConvertible, Sendable {
@@ -81,6 +82,16 @@ public final class TextureStore {
     private let device: MTLDevice
     private let loader: MTKTextureLoader
     private var cache: [Key: MTLTexture] = [:]
+
+    /// **How large textures are loaded** (``GraphicsSettings/textureQuality``). Below full, an image is read at each
+    /// side halved once or twice — decoded smaller by ImageIO, so nothing at full size is held on either side — and its
+    /// mips made from that. **Changing it forgets every texture loaded from a file**; whoever holds one asks again.
+    /// An image no larger than ``smallestReduced`` on its longer side is always loaded whole: an icon or a palette
+    /// halved is a blur, and saves nothing.
+    public var quality: GraphicsSettings.TextureQuality = .full {
+        didSet { if quality != oldValue { cache.removeAll() } }
+    }
+    public static let smallestReduced = 128
 
     /// A 1×1 opaque white, for binding where a material has no map.
     ///
@@ -177,10 +188,13 @@ public final class TextureStore {
             let texture: MTLTexture
             // A texture inside a `.usdz`: the package's URL, the entry as its fragment (`textureSource`).
             if url.isFileURL, url.pathExtension.lowercased() == "usdz", let entry = url.fragment(percentEncoded: false) {
-                texture = try loader.newTexture(data: try USDZArchive.entry(entry, in: url), options: options)
+                let data = try USDZArchive.entry(entry, in: url)
+                texture = try reduced(CGImageSourceCreateWithData(data as CFData, nil), isColor: isColor, origin: origin)
+                    ?? loader.newTexture(data: data, options: options)
                 texture.label = (entry as NSString).lastPathComponent
             } else {
-                texture = try loader.newTexture(URL: url, options: options)
+                texture = try reduced(CGImageSourceCreateWithURL(url as CFURL, nil), isColor: isColor, origin: origin)
+                    ?? loader.newTexture(URL: url, options: options)
                 texture.label = url.lastPathComponent
             }
             cache[key] = texture
@@ -189,6 +203,63 @@ public final class TextureStore {
             throw TextureStoreError.loadFailed(url.lastPathComponent, underlying: error)
         }
     }
+
+    /// The image read smaller, per ``quality``; nil to load it as it is — at full quality, small enough to keep whole, or
+    /// a file ImageIO cannot measure (it is then loaded whole, as before).
+    ///
+    /// **Made here, not by `MTKTextureLoader`** (2026-10-28), which got both of a reduced image's conventions wrong: it read
+    /// ImageIO's XRGB as RGBX — every channel one place along, red rock drawn blue — and, given a `CGImage`, made a linear
+    /// texture whatever `.SRGB` said, so a colour map was decoded as if already linear and a whole map came out pale. Here
+    /// the image is drawn into plain RGBA bytes, the way up `origin` asks, and uploaded into the same format the loader
+    /// gives a whole image's — sRGB for colour — with its mips.
+    private func reduced(_ source: CGImageSource?, isColor: Bool, origin: TextureOrigin) throws -> MTLTexture? {
+        guard quality.reduction > 0, let source,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        let longest = max(width, height)
+        guard longest > Self.smallestReduced else { return nil }
+        let target = max(longest >> quality.reduction, Self.smallestReduced)
+        let thumbnail: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: target,
+            kCGImageSourceCreateThumbnailWithTransform: false,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnail as CFDictionary),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let staging = device.makeBuffer(length: image.width * image.height * 4, options: .storageModeShared),
+              let context = CGContext(data: staging.contents(), width: image.width, height: image.height,
+                                      bitsPerComponent: 8, bytesPerRow: image.width * 4, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
+        else { return nil }
+        // A context's first row in memory is the image's top. `v = 0` at the bottom wants the bottom row first.
+        if origin == .bottomLeft {
+            context.translateBy(x: 0, y: CGFloat(image.height))
+            context.scaleBy(x: 1, y: -1)
+        }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: isColor ? .rgba8Unorm_srgb : .rgba8Unorm,
+                                                                  width: image.width, height: image.height, mipmapped: true)
+        descriptor.usage = .shaderRead
+        descriptor.storageMode = .private
+        guard let texture = device.makeTexture(descriptor: descriptor),
+              let queue = uploadQueue, let commands = queue.makeCommandBuffer(),
+              let blit = commands.makeBlitCommandEncoder() else { return nil }
+        blit.copy(from: staging, sourceOffset: 0, sourceBytesPerRow: image.width * 4,
+                  sourceBytesPerImage: image.width * image.height * 4,
+                  sourceSize: MTLSize(width: image.width, height: image.height, depth: 1),
+                  to: texture, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        blit.generateMipmaps(for: texture)
+        blit.endEncoding()
+        commands.commit()
+        commands.waitUntilCompleted()
+        return texture
+    }
+
+    /// For uploading reduced textures — made when the first is.
+    private lazy var uploadQueue: MTLCommandQueue? = device.makeCommandQueue()
 
     /// Drops every texture loaded from `file` — or from inside it, for a `.usdz` — so the next request reads the
     /// file again. For a tool whose files change on disk while it runs: an editor reloading a prop someone exported

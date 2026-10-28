@@ -58,62 +58,105 @@ public nonisolated struct CollisionMesh: Sendable {
 
     /// **Things placed in the world**: each one's triangles in its own space, and every transform it is placed with.
     /// The corners are transformed here, in one pass, rather than gathered into one enormous array first.
+    ///
+    /// **Written as plain loops over preallocated buffers** (2026-10-28): with `for x in a...b` and appends, an
+    /// unoptimised build spent half a minute here on ten million triangles — Swift's generic range iterators and array
+    /// checks, not the arithmetic. Optimised builds are unchanged; the result is the same.
     public init(placed: [(transform: float4x4, triangles: [SIMD3<Float>])],
                 steepestFloor: Float = CollisionMesh.defaultSteepestFloor) {
         self.floorNormalY = cos(steepestFloor)
         let total = placed.reduce(0) { $0 + $1.triangles.count / 3 }
-        var corners = [Float](); corners.reserveCapacity(total * 9)
-        var normals = [SIMD3<Float>](); normals.reserveCapacity(total)
-        var spans = [SIMD2<Float>](); spans.reserveCapacity(total)
-        var boxes = [SIMD4<Float>](); boxes.reserveCapacity(total)   // min x, min z, max x, max z
+        var corners = [Float](repeating: 0, count: total * 9)
+        var normals = [SIMD3<Float>](repeating: .zero, count: total)
+        var spans = [SIMD2<Float>](repeating: .zero, count: total)
+        var boxes = [SIMD4<Float>](repeating: .zero, count: total)   // min x, min z, max x, max z
         var lo = SIMD2<Float>(repeating: .greatestFiniteMagnitude), hi = -lo
-        for (transform, local) in placed {
-            local.withUnsafeBufferPointer { points in
-                for t in 0..<(points.count / 3) {
-                    let a4 = transform * SIMD4(points[t * 3], 1)
-                    let b4 = transform * SIMD4(points[t * 3 + 1], 1)
-                    let c4 = transform * SIMD4(points[t * 3 + 2], 1)
-                    let a = SIMD3(a4.x, a4.y, a4.z), b = SIMD3(b4.x, b4.y, b4.z), c = SIMD3(c4.x, c4.y, c4.z)
-                    var n = simd_cross(b - a, c - a)
-                    let area = simd_length(n)
-                    guard area > 1e-8 else { continue }
-                    n /= area
-                    if n.y < 0 { n = -n }
-                    corners.append(a.x); corners.append(a.y); corners.append(a.z)
-                    corners.append(b.x); corners.append(b.y); corners.append(b.z)
-                    corners.append(c.x); corners.append(c.y); corners.append(c.z)
-                    normals.append(n)
-                    spans.append(SIMD2(Swift.min(a.y, b.y, c.y), Swift.max(a.y, b.y, c.y)))
-                    let box = SIMD4(Swift.min(a.x, b.x, c.x), Swift.min(a.z, b.z, c.z),
-                                    Swift.max(a.x, b.x, c.x), Swift.max(a.z, b.z, c.z))
-                    boxes.append(box)
-                    lo = simd_min(lo, SIMD2(box.x, box.y)); hi = simd_max(hi, SIMD2(box.z, box.w))
+        var kept = 0
+        corners.withUnsafeMutableBufferPointer { corners in
+        normals.withUnsafeMutableBufferPointer { normals in
+        spans.withUnsafeMutableBufferPointer { spans in
+        boxes.withUnsafeMutableBufferPointer { boxes in
+            for (transform, local) in placed {
+                local.withUnsafeBufferPointer { points in
+                    let count = points.count / 3
+                    var t = 0
+                    while t < count {
+                        let a4 = transform * SIMD4(points[t * 3], 1)
+                        let b4 = transform * SIMD4(points[t * 3 + 1], 1)
+                        let c4 = transform * SIMD4(points[t * 3 + 2], 1)
+                        t += 1
+                        let a = SIMD3(a4.x, a4.y, a4.z), b = SIMD3(b4.x, b4.y, b4.z), c = SIMD3(c4.x, c4.y, c4.z)
+                        var n = simd_cross(b - a, c - a)
+                        let area = simd_length(n)
+                        guard area > 1e-8 else { continue }
+                        n /= area
+                        if n.y < 0 { n = -n }
+                        let at = kept * 9
+                        corners[at] = a.x; corners[at + 1] = a.y; corners[at + 2] = a.z
+                        corners[at + 3] = b.x; corners[at + 4] = b.y; corners[at + 5] = b.z
+                        corners[at + 6] = c.x; corners[at + 7] = c.y; corners[at + 8] = c.z
+                        normals[kept] = n
+                        spans[kept] = SIMD2(Swift.min(a.y, b.y, c.y), Swift.max(a.y, b.y, c.y))
+                        let box = SIMD4(Swift.min(a.x, b.x, c.x), Swift.min(a.z, b.z, c.z),
+                                        Swift.max(a.x, b.x, c.x), Swift.max(a.z, b.z, c.z))
+                        boxes[kept] = box
+                        lo = simd_min(lo, SIMD2(box.x, box.y)); hi = simd_max(hi, SIMD2(box.z, box.w))
+                        kept += 1
+                    }
                 }
             }
         }
+        }
+        }
+        }
+        // Degenerate triangles were skipped: the arrays end where the kept ones do.
+        corners.removeLast(corners.count - kept * 9)
+        normals.removeLast(normals.count - kept)
+        spans.removeLast(spans.count - kept)
+        boxes.removeLast(boxes.count - kept)
         if boxes.isEmpty { lo = .zero; hi = .zero }
         let cell = Self.cellSize
         let columns = Swift.max(1, Int(((hi.x - lo.x) / cell).rounded(.down)) + 1)
         let rows = Swift.max(1, Int(((hi.y - lo.y) / cell).rounded(.down)) + 1)
-        func range(_ box: SIMD4<Float>) -> (Int, Int, Int, Int) {
-            (Int((box.x - lo.x) / cell), Int((box.y - lo.y) / cell),
-             Swift.min(columns - 1, Int((box.z - lo.x) / cell)), Swift.min(rows - 1, Int((box.w - lo.y) / cell)))
-        }
         var start = [Int32](repeating: 0, count: columns * rows + 1)
-        for box in boxes {
-            let (x0, z0, x1, z1) = range(box)
-            for z in z0...z1 { for x in x0...x1 { start[z * columns + x + 1] += 1 } }
-        }
-        for i in 1..<start.count { start[i] += start[i - 1] }
-        var fill = start
-        var members = [Int32](repeating: 0, count: Int(start[start.count - 1]))
-        for (t, box) in boxes.enumerated() {
-            let (x0, z0, x1, z1) = range(box)
-            for z in z0...z1 {
-                for x in x0...x1 {
-                    let i = z * columns + x
-                    members[Int(fill[i])] = Int32(t)
-                    fill[i] += 1
+        var members: [Int32] = []
+        boxes.withUnsafeBufferPointer { boxes in
+            start.withUnsafeMutableBufferPointer { start in
+                for box in boxes {
+                    var z = Int((box.y - lo.y) / cell)
+                    let x0 = Int((box.x - lo.x) / cell), x1 = Swift.min(columns - 1, Int((box.z - lo.x) / cell))
+                    let z1 = Swift.min(rows - 1, Int((box.w - lo.y) / cell))
+                    while z <= z1 {
+                        var x = x0
+                        while x <= x1 { start[z * columns + x + 1] += 1; x += 1 }
+                        z += 1
+                    }
+                }
+                var i = 1
+                while i < start.count { start[i] += start[i - 1]; i += 1 }
+            }
+            var fill = start
+            members = [Int32](repeating: 0, count: Int(start[start.count - 1]))
+            fill.withUnsafeMutableBufferPointer { fill in
+                members.withUnsafeMutableBufferPointer { members in
+                    var t = 0
+                    while t < boxes.count {
+                        let box = boxes[t]
+                        var z = Int((box.y - lo.y) / cell)
+                        let x0 = Int((box.x - lo.x) / cell), x1 = Swift.min(columns - 1, Int((box.z - lo.x) / cell))
+                        let z1 = Swift.min(rows - 1, Int((box.w - lo.y) / cell))
+                        while z <= z1 {
+                            var x = x0
+                            while x <= x1 {
+                                let i = z * columns + x
+                                members[Int(fill[i])] = Int32(t)
+                                fill[i] += 1
+                                x += 1
+                            }
+                            z += 1
+                        }
+                        t += 1
+                    }
                 }
             }
         }
@@ -139,11 +182,19 @@ public nonisolated struct CollisionMesh: Sendable {
         let x0 = Int(((x - radius - gridOrigin.x) / cell).rounded(.down)), x1 = Int(((x + radius - gridOrigin.x) / cell).rounded(.down))
         let z0 = Int(((z - radius - gridOrigin.y) / cell).rounded(.down)), z1 = Int(((z + radius - gridOrigin.y) / cell).rounded(.down))
         guard x1 >= 0, z1 >= 0, x0 < columns, z0 < rows else { return }
-        for cz in Swift.max(0, z0)...Swift.min(rows - 1, z1) {
-            for cx in Swift.max(0, x0)...Swift.min(columns - 1, x1) {
+        // Plain loops, for the same reason as the build: this runs for every question, every frame.
+        var cz = Swift.max(0, z0)
+        let lastZ = Swift.min(rows - 1, z1), firstX = Swift.max(0, x0), lastX = Swift.min(columns - 1, x1)
+        while cz <= lastZ {
+            var cx = firstX
+            while cx <= lastX {
                 let i = cz * columns + cx
-                for k in Int(cellStart[i])..<Int(cellStart[i + 1]) { body(cellTriangles[k]) }
+                var k = Int(cellStart[i])
+                let end = Int(cellStart[i + 1])
+                while k < end { body(cellTriangles[k]); k += 1 }
+                cx += 1
             }
+            cz += 1
         }
     }
 

@@ -7,6 +7,9 @@ import Testing
 import Foundation
 import Metal
 import ModelIO
+import ImageIO
+import CoreGraphics
+import simd
 @testable import WindageEngine
 
 /// The GPU half of materials.
@@ -207,5 +210,63 @@ struct TextureStoreTests {
         store.forget(file: package)
         #expect(try store.texture(.url(packed.url!), isColor: true) !== before)
         #expect(try store.texture(.url(map), isColor: true) === other)
+    }
+
+    /// A square PNG, red over blue, `size` pixels a side, written for the test — **RGB with no alpha**, as many asset packs' atlases
+    /// are: ImageIO reduces such a file to XRGB, which is what turned a map's red rock blue.
+    private func redOverBlue(_ size: Int) throws -> URL {
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let context = try #require(CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        // **Mid-tones, not primaries**: 0 and 255 come through any gamma curve unchanged, and a reduced image encoded as
+        // sRGB twice — drawn washed out — passed a test of pure red and blue.
+        context.setFillColor(CGColor(srgbRed: 0.25, green: 0.45, blue: 0.7, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: size, height: size / 2))       // CG's y is up: the bottom half
+        context.setFillColor(CGColor(srgbRed: 0.8, green: 0.35, blue: 0.2, alpha: 1))
+        context.fill(CGRect(x: 0, y: size / 2, width: size, height: size / 2))
+        let image = try #require(context.makeImage())
+        let url = FileManager.default.temporaryDirectory.appending(path: "red-over-blue-\(size)-\(UUID().uuidString).png")
+        let destination = try #require(CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        #expect(CGImageDestinationFinalize(destination))
+        return url
+    }
+
+    /// **Below full quality an image is loaded smaller, the same way up** (2026-10-28), and a small one whole.
+    @Test("Texture quality halves a large image, keeps a small one, and is the same way up")
+    func textureQualityReducesLargeImages() throws {
+        guard let store = try makeStore() else { return }
+        let large = try redOverBlue(512), small = try redOverBlue(64)
+        defer { try? FileManager.default.removeItem(at: large); try? FileManager.default.removeItem(at: small) }
+        let full = try store.texture(.url(large), isColor: false)
+        #expect(full.width == 512)
+        store.quality = .half
+        let half = try store.texture(.url(large), isColor: false)
+        #expect(half !== full, "changing the quality forgets what was loaded")
+        #expect(half.width == 256 && half.height == 256 && half.mipmapLevelCount > 1)
+        // The same colour as the whole image's, channel for channel — each read as its own format says, since the loader
+        // may store one BGRA and the other RGBA — blue, the bottom, at v = 0.
+        func rgb(_ texture: MTLTexture) throws -> SIMD3<Int> {
+            let t = try Self.firstTexel(texture).map(Int.init)
+            let bgra = [.bgra8Unorm, .bgra8Unorm_srgb].contains(texture.pixelFormat)
+            return bgra ? SIMD3(t[2], t[1], t[0]) : SIMD3(t[0], t[1], t[2])
+        }
+        let texel = try rgb(half), whole = try rgb(full)
+        func apart(_ a: SIMD3<Int>, _ b: SIMD3<Int>) -> Int { max(abs(a.x - b.x), abs(a.y - b.y), abs(a.z - b.z)) }
+        #expect(apart(texel, whole) <= 2, "half \(texel), whole \(whole)")
+        #expect(texel.z > texel.x + 60, "the bottom's blue, at v = 0: \(texel)")
+        // Colour maps too, read as sRGB both ways.
+        store.quality = .full
+        let colourWhole = try rgb(try store.texture(.url(large), isColor: true))
+        store.quality = .half
+        let colourHalfTexture = try store.texture(.url(large), isColor: true)
+        let colourHalf = try rgb(colourHalfTexture)
+        // **Read as sRGB**, as the whole image is: raw bytes alike in a linear texture drew a whole map pale.
+        #expect([.rgba8Unorm_srgb, .bgra8Unorm_srgb].contains(colourHalfTexture.pixelFormat))
+        #expect(![.rgba8Unorm_srgb, .bgra8Unorm_srgb].contains(half.pixelFormat), "data, not colour, stays linear")
+        #expect(apart(colourHalf, colourWhole) <= 2, "colour half \(colourHalf), whole \(colourWhole)")
+        store.quality = .quarter
+        #expect(try store.texture(.url(large), isColor: false).width == 128)
+        #expect(try store.texture(.url(small), isColor: false).width == 64, "a small image stays whole")
     }
 }
