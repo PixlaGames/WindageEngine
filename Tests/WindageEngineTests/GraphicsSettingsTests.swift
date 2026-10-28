@@ -27,7 +27,7 @@ struct GraphicsSettingsTests {
         #expect(GraphicsSettings().summary == "High, 60 fps")
         var own = GraphicsSettings.Preset.medium.settings
         own.renderScale = .threeQuarters
-        #expect(own.summary == "shadows low, draw 80%, ground cover 75%, scale ¾, 2× anti-aliasing, 60 fps")
+        #expect(own.summary == "shadows low, draw 80%, ground cover 75%, scale ¾, 2× anti-aliasing, reflections on, 60 fps")
     }
 
     @Test("Saved settings that ask for more or less than the screen offers are brought back in range")
@@ -92,5 +92,14 @@ struct GraphicsSettingsTests {
         renderer.apply(GraphicsSettings(), automaticScaling: .capped(width: 1920, beyond: 2600))
         #expect(renderer.sampleCount == (device.supportsTextureSampleCount(4) ? 4 : 1))
         #expect(renderer.sceneScaling == .capped(width: 1920, beyond: 2600))
+    }
+
+    @Test("Reflections are on unless a player or Low turns them off, and older saved settings keep them on")
+    func reflections() throws {
+        #expect(GraphicsSettings().reflections)
+        #expect(!GraphicsSettings.Preset.low.settings.reflections)
+        #expect(GraphicsSettings.Preset.medium.settings.reflections && GraphicsSettings.Preset.high.settings.reflections)
+        let older = try JSONDecoder().decode(GraphicsSettings.self, from: Data(#"{"shadows": "low", "antiAliasing": 2}"#.utf8))
+        #expect(older.reflections && older.shadows == .low)
     }
 }

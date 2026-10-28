@@ -80,6 +80,10 @@ public nonisolated struct GraphicsSettings: Equatable, Sendable, Codable {
     public var frameRate: Int = 60
     /// Samples per pixel in the scene (``FrameRenderer/sampleCount``): 1 is none, 4 smooths every edge.
     public var antiAliasing: Int = 4
+    /// **Whether water and the like reflect the world** (2026-10-28) — screen-space reflections, read from the solid scene
+    /// (``OpaqueTextures``), as ESO's and FFXIV's water settings switch them. A game that has none ignores it. About 2 ms
+    /// at 1960×1490 with a pond filling the view; off, a surface reflects only the sky's gradient.
+    public var reflections = true
 
     public static let drawDistanceRange: ClosedRange<Float> = 0.5...1
     public static let plantDensityRange: ClosedRange<Float> = 0.25...1
@@ -98,6 +102,7 @@ public nonisolated struct GraphicsSettings: Equatable, Sendable, Codable {
         renderScale = (try? c.decodeIfPresent(RenderScale.self, forKey: .renderScale)) ?? d.renderScale
         frameRate = (try? c.decodeIfPresent(Int.self, forKey: .frameRate)) ?? d.frameRate
         antiAliasing = (try? c.decodeIfPresent(Int.self, forKey: .antiAliasing)) ?? d.antiAliasing
+        reflections = (try? c.decodeIfPresent(Bool.self, forKey: .reflections)) ?? d.reflections
     }
 
     /// **Clamped where it is used**, so a stale saved value cannot ask for something the screen never offers.
@@ -124,7 +129,7 @@ public nonisolated struct GraphicsSettings: Equatable, Sendable, Codable {
         case low, medium, high
 
         /// The engine's presets: High is the defaults; Medium near shadows, 2×, a little less far and thick; Low no
-        /// shadows, no anti-aliasing, half the ground cover and the scene at 75%. Measured in a dense wood at
+        /// shadows, no anti-aliasing, half the ground cover, the scene at 75% and no reflections. Measured in a dense wood at
         /// 1960×1490 (Debug): 25.7, 18.6 and 9.2 ms.
         public var settings: GraphicsSettings {
             var s = GraphicsSettings()
@@ -142,6 +147,7 @@ public nonisolated struct GraphicsSettings: Equatable, Sendable, Codable {
                 s.drawDistance = 0.6
                 s.plantDensity = 0.5
                 s.renderScale = .threeQuarters
+                s.reflections = false
             }
             return s
         }
@@ -162,7 +168,7 @@ public nonisolated struct GraphicsSettings: Equatable, Sendable, Codable {
         }
         return "shadows \(shadows.rawValue), draw \(Int((drawDistance * 100).rounded()))%, "
             + "ground cover \(Int((plantDensity * 100).rounded()))%, scale \(scale), "
-            + "\(antiAliasing)× anti-aliasing, \(frameRate) fps"
+            + "\(antiAliasing)× anti-aliasing, reflections \(reflections ? "on" : "off"), \(frameRate) fps"
     }
 
     // MARK: Ground cover

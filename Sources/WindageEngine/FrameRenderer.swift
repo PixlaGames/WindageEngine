@@ -57,11 +57,36 @@ public protocol GameLoop: AnyObject {
     ///
     /// Default implementation does nothing.
     func encodeHUD(into encoder: MTL4RenderCommandEncoder, frameSlot: Int, interpolation: Float)
+
+    /// **Whether this game draws things that see the scene behind them** — water that reflects the bank, glass that
+    /// bends what is behind it, heat haze. When true, the scene is drawn in two passes: everything solid in
+    /// ``encode(into:frameSlot:interpolation:)``, then a copy of what that drew (``OpaqueTextures`` — Unity's opaque
+    /// and depth textures), then ``encodeTransparent(into:opaque:frameSlot:interpolation:)`` over it, which may read the
+    /// copy. False, the default: one pass, as always.
+    var wantsOpaqueTextures: Bool { get }
+
+    /// Encode what is drawn over the solid scene and reads it — only when ``wantsOpaqueTextures``. Same targets, same
+    /// depth, loaded where the solid pass left them; `opaque` holds that pass's colour and depth, single-sampled.
+    ///
+    /// Default implementation does nothing.
+    func encodeTransparent(into encoder: MTL4RenderCommandEncoder, opaque: OpaqueTextures, frameSlot: Int,
+                           interpolation: Float)
 }
 
 public extension GameLoop {
     func encodePrePasses(into commandBuffer: MTL4CommandBuffer, frameSlot: Int, interpolation: Float) {}
     func encodeHUD(into encoder: MTL4RenderCommandEncoder, frameSlot: Int, interpolation: Float) {}
+    var wantsOpaqueTextures: Bool { false }
+    func encodeTransparent(into encoder: MTL4RenderCommandEncoder, opaque: OpaqueTextures, frameSlot: Int,
+                           interpolation: Float) {}
+}
+
+/// **The solid scene as drawn, for what is drawn over it to read** (``GameLoop/wantsOpaqueTextures``): its colour, in the
+/// scene's HDR format, and its depth — reversed-Z, `1` near, `0` at the far plane — both one sample a pixel whatever the
+/// scene's anti-aliasing, at the scene's size. Copies, so reading them while drawing over the scene is safe.
+public struct OpaqueTextures {
+    public let colour: MTLTexture
+    public let depth: MTLTexture
 }
 
 /// Why a ``FrameRenderer`` could not be made.
@@ -178,6 +203,9 @@ public final class FrameRenderer {
     private var sceneTexture: MTLTexture?
     /// The scene's multisampled colour, resolved into ``sceneTexture``; nil at one sample.
     private var multisampleTexture: MTLTexture?
+    /// The solid scene's colour and depth for a game that reads them (``OpaqueTextures``); nil until one asks.
+    private var opaqueColourTexture: MTLTexture?
+    private var opaqueDepthTexture: MTLTexture?
     private var toneMapPipeline: MTLRenderPipelineState?
     private let toneMapArgumentTable: MTL4ArgumentTable
     private let toneMapUniformBuffer: MTLBuffer
@@ -496,7 +524,9 @@ public final class FrameRenderer {
         // **Removed as well as added** — a window dragged between displays resizes repeatedly, and a residency set
         // that only ever grows holds every intermediate size resident for the life of the process — **but not yet**:
         // frames still on the GPU are drawing into them (``retiredTargets``).
-        let replaced = [previous, previousDepth, previousMultisample].compactMap { $0 }
+        let replaced = [previous, previousDepth, previousMultisample, opaqueColourTexture, opaqueDepthTexture].compactMap { $0 }
+        opaqueColourTexture = nil
+        opaqueDepthTexture = nil
         if !replaced.isEmpty { retiredTargets.append((replaced, UInt64(max(frameIndex - 1, 0)))) }
         if let sceneTexture { residencySet.addAllocations([sceneTexture]) }
         if let depthTexture { residencySet.addAllocations([depthTexture]) }
@@ -526,6 +556,100 @@ public final class FrameRenderer {
         updateRenderTargets(width: width, height: height)
         guard let depthTexture, let sceneTexture else { return nil }
         return (depthTexture, sceneTexture)
+    }
+
+    /// **The scene, into its HDR target** — one pass, or for a game that reads the solid scene
+    /// (``GameLoop/wantsOpaqueTextures``) the solid pass, a copy of its colour and depth, and a second pass over it.
+    /// False when an encoder could not be made.
+    private func encodeScene(depth: MTLTexture, scene: MTLTexture, frameSlot: Int, interpolation: Float,
+                             game: GameLoop) -> Bool {
+        let twoPasses = game.wantsOpaqueTextures
+        let passDescriptor = MTL4RenderPassDescriptor()
+        sceneColourAttachment(passDescriptor, scene: scene)
+        // Built fresh rather than mutated in place: `depthAttachment` is a `copy` property, so whether edits to the
+        // returned object stick is not something to rely on.
+        let depthAttachment = MTLRenderPassDepthAttachmentDescriptor()
+        depthAttachment.texture = depth
+        depthAttachment.loadAction = .clear
+        depthAttachment.clearDepth = FrameRenderer.reversedZClearDepth
+        depthAttachment.storeAction = .dontCare
+        let stencil = stencilAttachment(depth)
+        if twoPasses {
+            // Kept for the second pass, and resolved into the opaque copies.
+            ensureOpaqueTextures(like: scene)
+            if depth.sampleCount > 1 {
+                passDescriptor.colorAttachments[0].storeAction = .storeAndMultisampleResolve
+                depthAttachment.resolveTexture = opaqueDepthTexture
+                depthAttachment.depthResolveFilter = .sample0
+                depthAttachment.storeAction = .storeAndMultisampleResolve
+            } else {
+                depthAttachment.storeAction = .store
+            }
+            stencil.storeAction = .store
+        }
+        passDescriptor.depthAttachment = depthAttachment
+        passDescriptor.stencilAttachment = stencil
+
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) else { return false }
+        encoder.label = twoPasses ? "Scene, solid" : "Scene"
+        // **Wait for what the pre-passes wrote.** Shadow maps are drawn into by a pass in this very
+        // command buffer and sampled here, and Metal 4 tracks no hazard for you: without this the scene
+        // may sample a shadow map the shadow pass has not finished writing. It looked right in play —
+        // the previous frame's maps are there to sample — and the first frame of all, with nothing in
+        // them yet, came out differently on every run: shadows from another run's memory, or a black
+        // scene. Found by drawing a frame into a texture with no window (2026-09-11).
+        encoder.barrier(afterQueueStages: .fragment, beforeStages: .fragment, visibilityOptions: .device)
+        game.encode(into: encoder, frameSlot: frameSlot, interpolation: interpolation)
+        encoder.endEncoding()
+        guard twoPasses, let opaqueColour = opaqueColourTexture, let opaqueDepth = opaqueDepthTexture else { return true }
+
+        // **The copies**: the resolved colour, and — at one sample, where no resolve made it — the depth.
+        guard let copy = commandBuffer.makeComputeCommandEncoder() else { return false }
+        copy.label = "Opaque textures"
+        copy.barrier(afterQueueStages: .fragment, beforeStages: .blit, visibilityOptions: .device)
+        copy.copy(sourceTexture: scene, destinationTexture: opaqueColour)
+        if depth.sampleCount == 1 { copy.copy(sourceTexture: depth, destinationTexture: opaqueDepth) }
+        copy.endEncoding()
+
+        // **The second pass, over the first**: everything loaded where the solid pass left it.
+        let overDescriptor = MTL4RenderPassDescriptor()
+        sceneColourAttachment(overDescriptor, scene: scene)
+        overDescriptor.colorAttachments[0].loadAction = .load
+        let overDepth = MTLRenderPassDepthAttachmentDescriptor()
+        overDepth.texture = depth
+        overDepth.loadAction = .load
+        overDepth.storeAction = .dontCare
+        overDescriptor.depthAttachment = overDepth
+        let overStencil = stencilAttachment(depth)
+        overStencil.loadAction = .load
+        overDescriptor.stencilAttachment = overStencil
+        guard let over = commandBuffer.makeRenderCommandEncoder(descriptor: overDescriptor) else { return false }
+        over.label = "Scene, over the solid"
+        over.barrier(afterQueueStages: [.fragment, .blit], beforeStages: [.vertex, .fragment], visibilityOptions: .device)
+        game.encodeTransparent(into: over, opaque: OpaqueTextures(colour: opaqueColour, depth: opaqueDepth),
+                               frameSlot: frameSlot, interpolation: interpolation)
+        over.endEncoding()
+        return true
+    }
+
+    /// The opaque copies at the scene's size, made the first time a game asks for them and again after a resize.
+    private func ensureOpaqueTextures(like scene: MTLTexture) {
+        if let colour = opaqueColourTexture, colour.width == scene.width, colour.height == scene.height { return }
+        let colour = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: FrameRenderer.sceneColorPixelFormat,
+                                                              width: scene.width, height: scene.height, mipmapped: false)
+        colour.usage = .shaderRead
+        colour.storageMode = .private
+        let depth = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: FrameRenderer.depthPixelFormat,
+                                                             width: scene.width, height: scene.height, mipmapped: false)
+        // A render target too: at more than one sample the depth is resolved into it.
+        depth.usage = [.shaderRead, .renderTarget]
+        depth.storageMode = .private
+        opaqueColourTexture = device.makeTexture(descriptor: colour)
+        opaqueColourTexture?.label = "Opaque Colour"
+        opaqueDepthTexture = device.makeTexture(descriptor: depth)
+        opaqueDepthTexture?.label = "Opaque Depth"
+        residencySet.addAllocations([opaqueColourTexture, opaqueDepthTexture].compactMap { $0 })
+        residencySet.commit()
     }
 
     /// The scene pass's colour: the scene target itself, or the multisampled target resolved into it.
@@ -623,21 +747,8 @@ public final class FrameRenderer {
         guard let (depthTexture, sceneTexture) = targetsAfterPrePasses(width: texture.width, height: texture.height,
                                                                        depth: depthTexture, scene: sceneTexture) else { return }
 
-        let passDescriptor = MTL4RenderPassDescriptor()
-        sceneColourAttachment(passDescriptor, scene: sceneTexture)
-        let depthAttachment = MTLRenderPassDepthAttachmentDescriptor()
-        depthAttachment.texture = depthTexture
-        depthAttachment.loadAction = .clear
-        depthAttachment.clearDepth = FrameRenderer.reversedZClearDepth
-        depthAttachment.storeAction = .dontCare
-        passDescriptor.depthAttachment = depthAttachment
-        passDescriptor.stencilAttachment = stencilAttachment(depthTexture)
-
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) else { return }
-        encoder.label = "Scene, into a texture"
-        encoder.barrier(afterQueueStages: .fragment, beforeStages: .fragment, visibilityOptions: .device)
-        game.encode(into: encoder, frameSlot: frameSlot, interpolation: interpolation)
-        encoder.endEncoding()
+        guard encodeScene(depth: depthTexture, scene: sceneTexture, frameSlot: frameSlot, interpolation: interpolation,
+                          game: game) else { return }
 
         encodeToneMapAndInterface(to: texture, scene: sceneTexture, frameSlot: frameSlot,
                                   interpolation: interpolation, game: game)
@@ -675,34 +786,9 @@ public final class FrameRenderer {
                                                                        height: drawable.texture.height,
                                                                        depth: depthTexture, scene: sceneTexture) else { return }
 
-        // **Pass one: the scene, into an HDR target.** Not into the drawable — see
-        // `sceneColorPixelFormat`.
-        let passDescriptor = MTL4RenderPassDescriptor()
-        sceneColourAttachment(passDescriptor, scene: sceneTexture)
-
-        // Built fresh rather than mutated in place: `depthAttachment` is a `copy` property, so
-        // whether edits to the returned object stick is not something to rely on.
-        let depthAttachment = MTLRenderPassDepthAttachmentDescriptor()
-        depthAttachment.texture = depthTexture
-        depthAttachment.loadAction = .clear
-        depthAttachment.clearDepth = FrameRenderer.reversedZClearDepth
-        depthAttachment.storeAction = .dontCare
-        passDescriptor.depthAttachment = depthAttachment
-        passDescriptor.stencilAttachment = stencilAttachment(depthTexture)
-
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) else {
-            fatalError("Failed to create render command encoder")
-        }
-        encoder.label = "Scene"
-        // **Wait for what the pre-passes wrote.** Shadow maps are drawn into by a pass in this very
-        // command buffer and sampled here, and Metal 4 tracks no hazard for you: without this the scene
-        // may sample a shadow map the shadow pass has not finished writing. It looked right in play —
-        // the previous frame's maps are there to sample — and the first frame of all, with nothing in
-        // them yet, came out differently on every run: shadows from another run's memory, or a black
-        // scene. Found by drawing a frame into a texture with no window (2026-09-11).
-        encoder.barrier(afterQueueStages: .fragment, beforeStages: .fragment, visibilityOptions: .device)
-        game.encode(into: encoder, frameSlot: frameSlot, interpolation: alpha)
-        encoder.endEncoding()
+        // **Pass one: the scene, into an HDR target.** Not into the drawable — see `sceneColorPixelFormat`.
+        guard encodeScene(depth: depthTexture, scene: sceneTexture, frameSlot: frameSlot, interpolation: alpha,
+                          game: game) else { fatalError("Failed to create render command encoder") }
 
         encodeToneMapAndInterface(to: drawable.texture, scene: sceneTexture, frameSlot: frameSlot,
                                   interpolation: alpha, game: game)

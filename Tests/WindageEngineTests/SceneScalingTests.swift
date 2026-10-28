@@ -75,6 +75,54 @@ struct SceneScalingTests {
     }
 }
 
+/// **A game that reads the solid scene** (``GameLoop/wantsOpaqueTextures``): the second pass is given copies at the
+/// scene's size, and what the solid pass drew comes through it untouched, at one sample and at four.
+@Suite("Opaque textures")
+struct OpaqueTexturesTests {
+    private final class Reader: GameLoop {
+        var given: [(Int, Int, Int, Int)] = []
+        var wantsOpaqueTextures: Bool { true }
+        func beginFrame() {}
+        func step(deltaTime: Float) {}
+        func viewportSizeChanged(width: Int, height: Int) {}
+        func encode(into encoder: MTL4RenderCommandEncoder, frameSlot: Int, interpolation: Float) {}
+        func encodeTransparent(into encoder: MTL4RenderCommandEncoder, opaque: OpaqueTextures, frameSlot: Int,
+                               interpolation: Float) {
+            given.append((opaque.colour.width, opaque.colour.height, opaque.depth.width, opaque.depth.sampleCount))
+        }
+    }
+
+    @Test("The second pass gets the copies, and the solid pass's picture comes through it", arguments: [1, 4])
+    @MainActor
+    func theSolidSceneComesThrough(samples: Int) throws {
+        guard let device = MTLCreateSystemDefaultDevice(), device.supportsFamily(.metal4) else { return }
+        let renderer = try FrameRenderer(device: device)
+        let game = Reader()
+        renderer.game = game
+        renderer.toneMapping = .off
+        renderer.sampleCount = samples
+        renderer.clearColor = MTLClearColor(red: 0.25, green: 0.5, blue: 0.75, alpha: 1)
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: FrameRenderer.colorPixelFormat,
+                                                                  width: 64, height: 48, mipmapped: false)
+        descriptor.usage = .renderTarget
+        descriptor.storageMode = .shared
+        let target = try #require(device.makeTexture(descriptor: descriptor))
+        renderer.residencySet.addAllocation(target)
+        renderer.commitResidency()
+        renderer.render(into: target)
+        renderer.render(into: target)
+
+        #expect(game.given.count == 2, "the second pass ran once a frame")
+        #expect(game.given.allSatisfy { $0 == (64, 48, 64, 1) }, "copies at the scene's size, one sample: \(game.given)")
+        var pixels = [UInt8](repeating: 0, count: 64 * 48 * 4)
+        target.getBytes(&pixels, bytesPerRow: 64 * 4, from: MTLRegionMake2D(0, 0, 64, 48), mipmapLevel: 0)
+        let corner = Array(pixels[0..<4]), middle = Array(pixels[(24 * 64 + 32) * 4..<(24 * 64 + 32) * 4 + 4])
+        #expect(abs(Int(corner[0]) - 225) <= 2 && abs(Int(corner[1]) - 188) <= 2 && abs(Int(corner[2]) - 137) <= 2,
+                "\(corner)")
+        #expect(corner == middle)
+    }
+}
+
 /// The engine's frame check: a PNG of the frame, and frames timed.
 @Suite("Frame check")
 struct FrameCheckTests {
