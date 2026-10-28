@@ -61,13 +61,36 @@ public nonisolated struct Camera: Sendable, Equatable {
 
         /// Radians per second at full stick deflection.
         public var stickLookSpeed: Float = 3.2
+        /// **The player's own multiple of both speeds** — what an editor's scroll wheel or speed setting changes while
+        /// flying (Unreal's camera speed, Unity's and Blender's wheel), stepped along ``Camera/speedScales``. A world
+        /// ten times the size wants a camera that crosses it in the same time, and only the person flying knows
+        /// which they are in.
+        public var speedScale: Float = 1
+        /// **How far a held direction builds the speed**, as a multiple — Unity's flythrough acceleration: a tap
+        /// moves at the speed set, a direction held for ``boostTime`` reaches this many times it, so short moves stay
+        /// precise and long ones cover ground. 1 is none, the default.
+        public var boost: Float = 1
+        /// Seconds of holding a direction to reach the whole ``boost``.
+        public var boostTime: Float = 2
 
         public init(walkSpeed: Float = 6, sprintSpeed: Float = 18,
-                    lookSensitivity: Float = 0.0022, stickLookSpeed: Float = 3.2) {
+                    lookSensitivity: Float = 0.0022, stickLookSpeed: Float = 3.2,
+                    speedScale: Float = 1, boost: Float = 1, boostTime: Float = 2) {
             self.walkSpeed = walkSpeed
             self.sprintSpeed = sprintSpeed
             self.lookSensitivity = lookSensitivity
             self.stickLookSpeed = stickLookSpeed
+            self.speedScale = speedScale
+            self.boost = boost
+            self.boostTime = boostTime
+        }
+
+        /// ``speedScale`` moved `steps` along ``Camera/speedScales`` — up for positive — from the nearest step to where
+        /// it is, and held at the ends.
+        public mutating func stepSpeedScale(_ steps: Int) {
+            let scales = Camera.speedScales
+            let nearest = scales.indices.min { abs(log2(scales[$0] / speedScale)) < abs(log2(scales[$1] / speedScale)) } ?? 0
+            speedScale = scales[min(max(nearest + steps, 0), scales.count - 1)]
         }
     }
 
@@ -85,6 +108,20 @@ public nonisolated struct Camera: Sendable, Equatable {
     }
 
     public var tuning: Tuning
+
+    /// Seconds a direction has been held without a break — what ``Tuning/boost`` builds on. Zero when still.
+    public private(set) var heldFor: Float = 0
+
+    /// **The steps of ``Tuning/speedScale``**, doubling: an eighth to eight times, the span of Unreal's eight camera
+    /// speeds. Doubling, because a speed is judged by ratio — from 1× the next useful step is 2×, not 1.25×.
+    public static let speedScales: [Float] = [0.125, 0.25, 0.5, 1, 2, 4, 8]
+
+    /// The speed a held direction is going at now, as a multiple of the speed set: 1 at first, up to ``Tuning/boost``.
+    public var boostNow: Float {
+        guard tuning.boost > 1, tuning.boostTime > 0 else { return 1 }
+        let t = min(heldFor / tuning.boostTime, 1)
+        return 1 + (tuning.boost - 1) * t * t * (3 - 2 * t)
+    }
 
     /// Just short of straight up or down.
     ///
@@ -162,14 +199,15 @@ public nonisolated struct Camera: Sendable, Equatable {
     public mutating func advance(_ input: MovementInput, deltaTime: Float) {
         var direction = forward * input.forward + right * input.strafe + SIMD3<Float>(0, 1, 0) * input.vertical
         let lengthSquared = simd_length_squared(direction)
-        guard lengthSquared > 0 else { return }
+        guard lengthSquared > 0 else { heldFor = 0; return }
+        heldFor += deltaTime
 
         // **Clamped to 1, not normalised**, so holding two keys at once is not faster than one — and
         // a stick pushed a third of the way goes a third as fast. Normalising did the first and
         // broke the second: every deflection past the dead zone flew at full speed (2026-09-11).
         if lengthSquared > 1 { direction /= lengthSquared.squareRoot() }
 
-        let speed = input.isSprinting ? tuning.sprintSpeed : tuning.walkSpeed
+        let speed = (input.isSprinting ? tuning.sprintSpeed : tuning.walkSpeed) * tuning.speedScale * boostNow
         position += direction * speed * deltaTime
     }
 

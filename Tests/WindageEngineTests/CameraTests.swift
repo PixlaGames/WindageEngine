@@ -196,4 +196,44 @@ struct CameraTests {
         #expect(Camera(position: SIMD3(1, 2, 3), yaw: 0.5) == Camera(position: SIMD3(1, 2, 3), yaw: 0.5))
         #expect(Camera() != Camera(tuning: .init(walkSpeed: 7)))
     }
+
+    // MARK: - Speed scale and boost
+
+    /// One second of flying forward, a step at a time, at 120 steps a second.
+    private func flown(_ camera: inout Camera, seconds: Float, _ input: MovementInput = MovementInput(forward: 1)) -> Float {
+        let start = camera.position
+        for _ in 0..<Int((seconds * 120).rounded()) { camera.advance(input, deltaTime: 1.0 / 120) }
+        return simd_distance(start, camera.position)
+    }
+
+    @Test("A speed scale multiplies both speeds; a default camera is as it was")
+    func speedScaleMultiplies() {
+        var plain = Camera(), scaled = Camera(tuning: .init(speedScale: 4))
+        #expect(abs(flown(&plain, seconds: 1) - 6) < 1e-3)
+        #expect(abs(flown(&scaled, seconds: 1) - 24) < 1e-2)
+        var sprinting = Camera(tuning: .init(speedScale: 0.5))
+        #expect(abs(flown(&sprinting, seconds: 1, MovementInput(forward: 1, isSprinting: true)) - 9) < 1e-2)
+    }
+
+    @Test("A held direction builds to the boost over its time, and letting go starts again")
+    func boostBuildsAndResets() {
+        var camera = Camera(tuning: .init(walkSpeed: 10, boost: 4, boostTime: 2))
+        let first = flown(&camera, seconds: 0.1)
+        #expect(first < 1.05, "a tap moves at the speed set: \(first) m in 0.1 s")
+        _ = flown(&camera, seconds: 2)
+        #expect(abs(camera.boostNow - 4) < 1e-4)
+        #expect(abs(flown(&camera, seconds: 1) - 40) < 0.05, "held, four times the speed")
+        camera.advance(.still, deltaTime: 1.0 / 120)
+        #expect(camera.heldFor == 0 && camera.boostNow == 1)
+    }
+
+    @Test("Speed steps double, hold at the ends, and start from the nearest step")
+    func speedSteps() {
+        var tuning = Camera.Tuning()
+        tuning.stepSpeedScale(1); #expect(tuning.speedScale == 2)
+        tuning.stepSpeedScale(10); #expect(tuning.speedScale == 8)
+        tuning.stepSpeedScale(-20); #expect(tuning.speedScale == 0.125)
+        tuning.speedScale = 3.1
+        tuning.stepSpeedScale(1); #expect(tuning.speedScale == 8, "3.1 is nearest 4, and up one is 8")
+    }
 }
