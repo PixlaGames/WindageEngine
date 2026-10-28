@@ -56,6 +56,40 @@ struct ParticleLifeTests {
         #expect(distances.filter { $0 > 1.5 }.count > 150, "crowded at the middle: a sphere fills from its edge")
     }
 
+    @Test("A steady trickle of short lives reuses the slots of the dead: the pool stays as big as the most alive at once")
+    func deadSlotsAreReused() {
+        var foam = butterfly
+        foam.lifetime = 1
+        foam.wander = 0
+        var system = ParticleSystem(recipes: [foam], capacity: 8192)
+        var emitter = ParticleEmitter(recipe: 0, rate: 60, seedBase: 3)
+        for _ in 0..<(60 * 30) {
+            emitter.emit(into: &system, at: .zero, deltaTime: 1.0 / 60)
+            system.step(deltaTime: 1.0 / 60)
+        }
+        // Sixty a second for up to 1.4 s each is under ninety alive; thirty seconds of births is 1,800.
+        #expect(system.liveCount > 40 && system.liveCount < 90)
+        #expect(system.particles.count < 100, "the pool grew to \(system.particles.count) for \(system.liveCount) alive")
+    }
+
+    @Test("A level spawn spreads births across a disc at the origin's height, evenly, and survives being saved")
+    func levelSpawn() throws {
+        var foam = butterfly
+        foam.spawnsLevel = true
+        var system = ParticleSystem(recipes: [foam], capacity: 400)
+        for seed in 0..<300 { system.burst(0, at: SIMD3(4, 1.5, -2), seed: seed) }
+        let births = system.live
+        #expect(births.allSatisfy { abs($0.position.y - 1.5) < 1e-5 }, "born above or below the surface")
+        let distances = births.map { simd_distance(SIMD2($0.position.x, $0.position.z), SIMD2(4, -2)) }
+        #expect(distances.allSatisfy { $0 <= 3.0001 })
+        // A disc evenly filled has a quarter of its area inside half its radius.
+        let inner = distances.filter { $0 < 1.5 }.count
+        #expect(inner > 50 && inner < 100, "\(inner) of 300 inside half the radius")
+        let back = try JSONDecoder().decode(ParticleRecipe.self, from: JSONEncoder().encode(foam))
+        #expect(back.spawnsLevel)
+        #expect(!(try JSONDecoder().decode(ParticleRecipe.self, from: Data(#"{"color":[1,1,1]}"#.utf8))).spawnsLevel)
+    }
+
     @Test("It fades in rather than appearing, and its wings beat between a quarter and full width")
     func fadeInAndFlap() {
         var system = ParticleSystem(recipes: [butterfly], capacity: 4)

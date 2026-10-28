@@ -75,6 +75,9 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
     public var maxSpeed: Float = .infinity
     /// Meters: born anywhere within this of the burst's origin rather than at it — a swarm, not a fountain.
     public var spawnRadius: Float = 0
+    /// **Born on a level disc** of ``spawnRadius`` rather than in a ball of it — for what lies on a surface: foam on
+    /// water, mist over a field. In a ball, half of a stream's foam was born under the water and never seen.
+    public var spawnsLevel: Bool = false
     /// Seconds it takes to appear, so nothing long-lived pops into being.
     public var fadeIn: Float = 0
     /// **Seconds it takes to go, at the end of its life** — solid until then. What a butterfly or a leaf wants:
@@ -114,7 +117,7 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
                 growth: Float = 0, gravity: Float = -6.5, drag: Float = 2.4,
                 color: SIMD3<Float>, opacity: Float = 1, fade: Float = 1, glows: Bool = false,
                 wander: Float = 0, wanderRate: Float = 0.3, maxSpeed: Float = .infinity, spawnRadius: Float = 0,
-                fadeIn: Float = 0, fadeOut: Float = 0, flapRate: Float = 0, sprite: Int? = nil,
+                spawnsLevel: Bool = false, fadeIn: Float = 0, fadeOut: Float = 0, flapRate: Float = 0, sprite: Int? = nil,
                 aspect: Float = 1, alignment: Alignment = .camera, axis: SIMD3<Float> = SIMD3(0, 1, 0),
                 stretch: Float = 0) {
         self.storedCount = max(0, count)
@@ -133,6 +136,7 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
         self.wanderRate = max(wanderRate, 0)
         self.maxSpeed = maxSpeed > 0 ? maxSpeed : .infinity
         self.spawnRadius = max(spawnRadius, 0)
+        self.spawnsLevel = spawnsLevel
         self.fadeIn = max(fadeIn, 0)
         self.fadeOut = max(fadeOut, 0)
         self.flapRate = max(flapRate, 0)
@@ -147,7 +151,7 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
 
     private enum CodingKeys: String, CodingKey {
         case count, speed, spread, lifetime, size, growth, gravity, drag, color, opacity, fade, glows
-        case wander, wanderRate, maxSpeed, spawnRadius, fadeIn, fadeOut, flapRate, sprite
+        case wander, wanderRate, maxSpeed, spawnRadius, spawnsLevel, fadeIn, fadeOut, flapRate, sprite
         case aspect, alignment, axis, stretch
     }
 
@@ -163,6 +167,7 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
                   opacity: value(.opacity, 1), fade: value(.fade, 1), glows: value(.glows, false),
                   wander: value(.wander, 0), wanderRate: value(.wanderRate, 0.3),
                   maxSpeed: value(.maxSpeed, .infinity), spawnRadius: value(.spawnRadius, 0),
+                  spawnsLevel: value(.spawnsLevel, false),
                   fadeIn: value(.fadeIn, 0), fadeOut: value(.fadeOut, 0), flapRate: value(.flapRate, 0),
                   sprite: (try? c.decodeIfPresent(Int.self, forKey: .sprite)) ?? nil,
                   aspect: value(.aspect, 1), alignment: value(.alignment, .camera), axis: value(.axis, SIMD3(0, 1, 0)),
@@ -177,7 +182,9 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
         try c.encode(opacity, forKey: .opacity); try c.encode(fade, forKey: .fade); try c.encode(glows, forKey: .glows)
         try c.encode(wander, forKey: .wander); try c.encode(wanderRate, forKey: .wanderRate)
         if maxSpeed.isFinite { try c.encode(maxSpeed, forKey: .maxSpeed) }
-        try c.encode(spawnRadius, forKey: .spawnRadius); try c.encode(fadeIn, forKey: .fadeIn); try c.encode(fadeOut, forKey: .fadeOut)
+        try c.encode(spawnRadius, forKey: .spawnRadius)
+        if spawnsLevel { try c.encode(spawnsLevel, forKey: .spawnsLevel) }
+        try c.encode(fadeIn, forKey: .fadeIn); try c.encode(fadeOut, forKey: .fadeOut)
         try c.encode(flapRate, forKey: .flapRate); try c.encodeIfPresent(sprite, forKey: .sprite)
         try c.encode(aspect, forKey: .aspect); try c.encode(alignment, forKey: .alignment)
         try c.encode(axis, forKey: .axis); try c.encode(stretch, forKey: .stretch)
@@ -252,6 +259,11 @@ public nonisolated struct ParticleSystem: Sendable {
 
     public private(set) var particles: [Particle] = []
     private var births = 0
+    /// **Slots whose particle has died**, for the next to be born in. Without them every birth was appended while the pool
+    /// had room, so a steady trickle of short-lived particles — foam on a stream, a few hundred a second — grew the pool
+    /// to its whole capacity of dead slots, and every step, count and draw walked all of them: 2.7 ms a step in a debug
+    /// build for 680 live ones, where the 505 butterflies beside them cost 0.45.
+    private var free: [Int] = []
 
     public init(recipes: [ParticleRecipe], capacity: Int = 1024) {
         self.recipes = recipes
@@ -269,6 +281,7 @@ public nonisolated struct ParticleSystem: Sendable {
         for index in particles.indices where particles[index].isAlive {
             let recipe = recipes[particles[index].recipe]
             particles[index].age += deltaTime
+            if !particles[index].isAlive { free.append(index); continue }
             particles[index].velocity.y += recipe.gravity * deltaTime
             if recipe.wander > 0 {
                 particles[index].velocity += ParticleSystem.wander(of: particles[index], recipe) * deltaTime
@@ -306,14 +319,17 @@ public nonisolated struct ParticleSystem: Sendable {
             let velocity = axis * r.speed * (0.45 + a * 0.75) + spread
 
             // Born within the spawn radius: a direction from three more draws, a distance from a fourth, cube-rooted
-            // so the sphere fills evenly rather than crowding its middle.
+            // so the sphere fills evenly rather than crowding its middle — square-rooted on a level disc, for the same
+            // reason in two dimensions.
             var place = origin
             if r.spawnRadius > 0 {
-                let d = SIMD3(ParticleSystem.hash(seed, i * 7 + 3), ParticleSystem.hash(seed, i * 7 + 4),
+                var d = SIMD3(ParticleSystem.hash(seed, i * 7 + 3), ParticleSystem.hash(seed, i * 7 + 4),
                               ParticleSystem.hash(seed, i * 7 + 5)) * 2 - 1
+                if r.spawnsLevel { d.y = 0 }
                 let length = simd_length(d)
                 if length > 1e-4 {
-                    place += d / length * r.spawnRadius * pow(ParticleSystem.hash(seed, i * 7 + 6), 1 / 3)
+                    let reach = pow(ParticleSystem.hash(seed, i * 7 + 6), r.spawnsLevel ? 1 / 2 : 1 / 3)
+                    place += d / length * r.spawnRadius * reach
                 }
             }
             add(Particle(position: place,
@@ -329,6 +345,11 @@ public nonisolated struct ParticleSystem: Sendable {
     }
 
     private mutating func add(_ particle: Particle) {
+        while let slot = free.popLast() {
+            guard !particles[slot].isAlive else { continue }
+            particles[slot] = particle
+            return
+        }
         if particles.count < capacity {
             particles.append(particle)
             return
