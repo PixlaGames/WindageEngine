@@ -22,6 +22,23 @@ struct FrustumTests {
                     maximum: center + SIMD3(repeating: size / 2))
     }
 
+    /// **Wholly inside, or not**: a tile of copies kept whole must really be wholly in view, and one straddling an
+    /// edge must be tested copy by copy.
+    @Test("A box wholly in view is contained; one across an edge or behind is not")
+    func containment() {
+        #expect(frustum.contains(box(at: SIMD3(0, 0, -50), size: 4)))
+        #expect(!frustum.contains(box(at: SIMD3(0, 0, -50), size: 200)), "it reaches past the sides")
+        #expect(frustum.mayIntersect(box(at: SIMD3(0, 0, -50), size: 200)))
+        #expect(!frustum.contains(box(at: SIMD3(0, 0, 20))))
+        // Contained is always also may-intersect.
+        for z in stride(from: Float(-400), through: 10, by: 7) {
+            for x in stride(from: Float(-200), through: 200, by: 31) {
+                let b = box(at: SIMD3(x, 0, z), size: 6)
+                if frustum.contains(b) { #expect(frustum.mayIntersect(b)) }
+            }
+        }
+    }
+
     @Test("Something straight ahead is visible")
     func aheadIsVisible() {
         #expect(frustum.mayIntersect(box(at: SIMD3(0, 0, -20))))

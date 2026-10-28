@@ -82,4 +82,18 @@ public nonisolated struct Frustum: Sendable, Equatable {
         }
         return true
     }
+
+    /// Whether the whole box is inside — **so everything in it is too**, and a culler that groups things into tiles can
+    /// keep a tile's contents without testing them one by one. The mirror of ``mayIntersect(_:)``: for each plane, the
+    /// corner *least* far along its normal — the negative vertex — must be inside.
+    public func contains(_ box: BoundingBox) -> Bool {
+        for plane in planes {
+            let normal = SIMD3(plane.x, plane.y, plane.z)
+            let negative = SIMD3(normal.x >= 0 ? box.minimum.x : box.maximum.x,
+                                 normal.y >= 0 ? box.minimum.y : box.maximum.y,
+                                 normal.z >= 0 ? box.minimum.z : box.maximum.z)
+            if simd_dot(normal, negative) + plane.w < 0 { return false }
+        }
+        return true
+    }
 }
