@@ -33,9 +33,17 @@ public nonisolated struct ProceduralSky: Sendable, Equatable, Codable {
     /// normalized, and a zero one points straight up.
     public var sunDirection: SIMD3<Float> {
         get { storedSunDirection }
-        set { storedSunDirection = ProceduralSky.normalized(newValue) }
+        set {
+            storedSunDirection = ProceduralSky.normalized(newValue)
+            authoredSunAngles = nil
+        }
     }
     private var storedSunDirection: SIMD3<Float>
+
+    /// **The pitch and yaw the sun was given, in degrees, as given** — so a level saves back what its author wrote. Worked
+    /// out from the direction instead, a sun written at yaw 295 came back as -65.00003: the same sun, and a number the
+    /// author never typed. Nil for a sun set as a vector, whose angles are worked out.
+    private var authoredSunAngles: SIMD2<Float>?
 
     /// The sun's own radiance — how bright the disc *is*, looked at.
     ///
@@ -57,19 +65,20 @@ public nonisolated struct ProceduralSky: Sendable, Equatable, Codable {
     /// is something you can picture and adjust; the same thing as `(-0.75, 0.56, 0.35)` is three
     /// numbers that must stay normalized and that nobody can read.
     public var sunPitchDegrees: Float {
-        get { Float.degrees(fromRadians: asin(simd_clamp(sunDirection.y, -1, 1))) }
+        get { authoredSunAngles?.x ?? Float.degrees(fromRadians: asin(simd_clamp(sunDirection.y, -1, 1))) }
         set { setSun(pitchDegrees: newValue, yawDegrees: sunYawDegrees) }
     }
 
     /// The compass direction of the sun, in degrees, measured the same way a level's yaws are.
     public var sunYawDegrees: Float {
-        get { Float.degrees(fromRadians: atan2(sunDirection.x, sunDirection.z)) }
+        get { authoredSunAngles?.y ?? Float.degrees(fromRadians: atan2(sunDirection.x, sunDirection.z)) }
         set { setSun(pitchDegrees: sunPitchDegrees, yawDegrees: newValue) }
     }
 
     private mutating func setSun(pitchDegrees: Float, yawDegrees: Float) {
         // Already unit length: stored as it comes, not normalized a second time.
         storedSunDirection = ProceduralSky.direction(pitchDegrees: pitchDegrees, yawDegrees: yawDegrees)
+        authoredSunAngles = SIMD2(pitchDegrees, yawDegrees)
     }
 
     private static func normalized(_ direction: SIMD3<Float>) -> SIMD3<Float> {
@@ -113,6 +122,7 @@ public nonisolated struct ProceduralSky: Sendable, Equatable, Codable {
                   sunDirection: ProceduralSky.direction(pitchDegrees: sunPitchDegrees,
                                                         yawDegrees: sunYawDegrees),
                   sunRadiance: sunRadiance, sunAngularRadius: sunAngularRadius)
+        authoredSunAngles = SIMD2(sunPitchDegrees, sunYawDegrees)
     }
 
     // MARK: - Codable

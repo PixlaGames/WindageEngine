@@ -1,3 +1,4 @@
+import Foundation
 //
 //  EnvironmentMapTests.swift
 //  WindageEngineTests
@@ -263,6 +264,20 @@ struct EnvironmentMapTests {
 /// **The sun's direction stays normalized however it is set.** Set by hand at any other length, every
 /// shader dot product with it was scaled by that length and the pitch read back was wrong.
 struct ProceduralSkyDirectionTests {
+
+    /// **A sky saves the angles it was given.** Worked out from the direction, a level's sun at yaw 295 came back from
+    /// the editor's save as -65.00003 — the same sun, and a number nobody typed.
+    @Test("A sky read from a file writes back the angles it was given")
+    func authoredAnglesRoundTrip() throws {
+        let sky = try JSONDecoder().decode(ProceduralSky.self, from: Data(#"{"sunPitch": 34, "sunYaw": 295}"#.utf8))
+        #expect(sky.sunYawDegrees == 295 && sky.sunPitchDegrees == 34)
+        let written = try JSONSerialization.jsonObject(with: JSONEncoder().encode(sky)) as! [String: Any]
+        #expect(written["sunYaw"] as? Double == 295 && written["sunPitch"] as? Double == 34)
+        // A sun set as a vector has no angles of its own: they are worked out, as before.
+        var turned = sky
+        turned.sunDirection = SIMD3(0, 1, 1)
+        #expect(abs(turned.sunPitchDegrees - 45) < 1e-3 && abs(turned.sunYawDegrees) < 1e-3)
+    }
 
     @Test("A sun direction set at any length is normalized")
     func sunDirectionNormalizedOnSet() {

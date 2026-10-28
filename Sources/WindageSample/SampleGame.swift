@@ -490,6 +490,17 @@ final class SampleGame: GameLoop {
     case "1": "WindageSample-check"
     case let name?: "WindageSample-check-\(name)"
     }
+    /// **Where the editor's copy of a level goes**: the player's own folder in ordinary play — `nil`, which is
+    /// `SampleLevel`'s own — and a check's own container in a check, emptied of edited levels as the check starts. With
+    /// one place for both, a check that edited a level would have saved into the player's folder, and the sample would
+    /// then have loaded the check's edits in ordinary play.
+    static let levelDirectory: URL? = {
+        guard isCheck else { return nil }
+        let folder = SaveStore<SampleRun.Progress>(container: container, name: "progress").url.deletingLastPathComponent()
+        for index in SampleLevel.names.indices { SampleLevel.discardEdits(index, in: folder) }
+        return folder
+    }()
+
     private static let progressStore: SaveStore<SampleRun.Progress> = {
         let store = isCheck ? SaveStore<SampleRun.Progress>(container: container, name: "progress") : SampleRun.sharedStore
         if isCheck { try? store.clear(); try? settingsStore.clear() }
@@ -663,7 +674,9 @@ final class SampleGame: GameLoop {
     /// The level, and the editing on top of it. **The engine owns what an edit *means*** — see
     /// `LevelEditor`; this file only turns clicks and keys into those operations and draws the result.
     private var editor: LevelEditor
-    private(set) var isEditing = false
+    /// **`WINDAGE_SAMPLE_EDITING=1` starts with the editor open** — for a recorded frame of its overlay, which is drawn
+    /// before any step and so before any key could open it.
+    private(set) var isEditing = ProcessInfo.processInfo.environment["WINDAGE_SAMPLE_EDITING"] == "1"
     var isEditingLevel: Bool { isEditing }
     private var level: Level { editor.level }
     /// Which level is loaded. **`var`, and that is the whole point of this pass** — everything about
@@ -827,7 +840,7 @@ final class SampleGame: GameLoop {
                       yaw: Float.radians(fromDegrees: parts[3]),
                       pitch: Float.radians(fromDegrees: parts[4]))
     }
-    private var levelURL: URL { SampleLevel.writableURL(levelIndex) }
+    private var levelURL: URL { SampleLevel.writableURL(levelIndex, in: SampleGame.levelDirectory) }
     private var levelPath: String
 
     /// The player's body. **The camera sits at its eye and no longer moves the player itself** —
@@ -1065,7 +1078,7 @@ final class SampleGame: GameLoop {
         engine.runsWhileHidden = ProcessInfo.processInfo.environment["WINDAGE_SAMPLE_WALK"] != nil
 
         levelIndex = SampleGame.startingLevel
-        let loaded = SampleLevel.load(levelIndex)
+        let loaded = SampleLevel.load(levelIndex, savedIn: SampleGame.levelDirectory)
         editor = LevelEditor(level: loaded.level)
         addKind = 0                                         // each level has its own kinds
         levelPath = loaded.report
@@ -1928,7 +1941,7 @@ final class SampleGame: GameLoop {
     /// been found by a second *copy* of the first level — only by one that differs.
     func load(level index: Int) {
         levelIndex = (index + SampleLevel.names.count) % SampleLevel.names.count
-        let loaded = SampleLevel.load(levelIndex)
+        let loaded = SampleLevel.load(levelIndex, savedIn: SampleGame.levelDirectory)
         editor = LevelEditor(level: loaded.level)
         levelPath = loaded.report
 
@@ -2153,7 +2166,7 @@ final class SampleGame: GameLoop {
                 // that copy shadows the shipped file for ever, so editing `courtyard.json` in the
                 // source tree appears to do nothing. Without this the only cure is knowing where
                 // Application Support is.
-                if SampleLevel.discardEdits(levelIndex) {
+                if SampleLevel.discardEdits(levelIndex, in: SampleGame.levelDirectory) {
                     print("WindageSample: discarded the edited copy")
                 } else {
                     print("WindageSample: there was no edited copy to discard")
@@ -2222,6 +2235,9 @@ final class SampleGame: GameLoop {
             // **"scale", not "×"**: the HUD's font is printable ASCII, and a "×" is silently dropped —
             // the line read "box at 2.4" the first time it was drawn.
             + (kind.scale == 1 ? "" : String(format: ", scale %.1f", kind.scale))
+            // **And whether it moves**: the courtyard's sliding block is a box at 1.5, and named only that it read as a
+            // crate — dropped, it slid away. A kind is everything about a placement, and moving is the part that shows.
+            + ["slider", "piston", "lift"].filter(kind.tags.contains).map { ", " + $0 }.joined()
     }
 
     /// Drops the chosen kind **where the crosshair meets the ground**, which is what "put one there"
@@ -2718,11 +2734,14 @@ final class SampleGame: GameLoop {
                 if let yaw = segment.yaw { camera.yaw = yaw }
                 if let pitch = segment.pitch { camera.pitch = pitch }
                 if let mouse = segment.mouse { lookWithMouse(mouse * input.mouseLookScale) }
+                // **`cmd+s` is ⌘S**: the editor's save, undo and discard are Command chords, and a script pressed them
+                // as a held modifier and a bare S, which the editor never sees as a chord.
+                let command = segment.keys.contains { $0 == .leftCommand || $0 == .rightCommand }
                 for key in segment.keys {
                     if let flag = key.modifierFlag {
                         modifiersChanged(key, flags: flag)
                     } else {
-                        keyPressed(key, command: false)
+                        keyPressed(key, command: command)
                     }
                 }
                 for name in segment.pads { setScriptPad(name, down: true) }
