@@ -3728,6 +3728,14 @@ final class SampleGame: GameLoop {
                          pointSize: hint, color: white)
             _ = hud.text("⌘S save · ⌘Z undo · ⌘R redo · ⌘⌫ revert to shipped · tab back to walking",
                          atBaseline: SIMD2(margin, viewportSize.y - margin), pointSize: hint, color: white)
+            // **Where i adds**: a ring round the crosshair with a cross in it, at the point the kind drops — a ring and
+            // diagonals, the two shapes the HUD feathers rather than fills, and the frame that keeps them smooth.
+            if !kinds.isEmpty {
+                let middle = viewportSize / 2, radius = 11 * scale, arm = 5 * scale
+                hud.fillRing(center: middle, innerRadius: radius - 1.5 * scale, outerRadius: radius, color: gold)
+                hud.line(from: middle + SIMD2(-arm, -arm), to: middle + SIMD2(arm, arm), thickness: 1.5 * scale, color: gold)
+                hud.line(from: middle + SIMD2(-arm, arm), to: middle + SIMD2(arm, -arm), thickness: 1.5 * scale, color: gold)
+            }
         } else {
             // **The hints follow whichever device is actually plugged in.** Telling somebody holding
             // a controller to press WASD is a small lie the game is in a position to avoid, and the

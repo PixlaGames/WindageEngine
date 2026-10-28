@@ -21,7 +21,7 @@ import simd
 ///
 /// **Every position is a `SIMD2<Float>`**, in the units ``begin(viewportSize:)`` was given, and every
 /// call names the shape it draws: ``fillRect(origin:size:color:)``, ``strokeRect(origin:size:thickness:color:)``,
-/// ``line(from:to:thickness:color:)``, ``fillRing(center:innerRadius:outerRadius:segments:color:)``,
+/// ``line(from:to:thickness:color:feather:)``, ``fillRing(center:innerRadius:outerRadius:segments:color:feather:)``,
 /// ``fillPolygon(_:color:feather:)`` and ``text(_:atBaseline:pointSize:color:)``. Layout arrives when a title actually needs it and can show
 /// what shape it should be — the same extract-when-proven rule as everything else here.
 /// Why a ``HUDRenderer`` could not be made.
@@ -205,19 +205,18 @@ public final class HUDRenderer {
         }
     }
 
-    /// A line of a given thickness, as a rotated quad.
-    public func line(from start: SIMD2<Float>, to end: SIMD2<Float>, thickness: Float, color: InterfaceColor) {
+    /// A line of a given thickness, as a rotated quad — **with its edges feathered** over `feather` of the HUD's units,
+    /// as ``fillPolygon(_:color:feather:)``'s are (2026-10-28). Drawn bare, every diagonal came out stair-stepped, and a
+    /// game's interface is mostly lines: a reticle, a mil ladder, a chevron. Pass 0 for hard edges.
+    public func line(from start: SIMD2<Float>, to end: SIMD2<Float>, thickness: Float, color: InterfaceColor,
+                     feather: Float = 1) {
         let delta = end - start
         let length = simd_length(delta)
         guard length > 0, color.srgb.w > 0 else { return }
 
         let direction = delta / length
         let normal = SIMD2(-direction.y, direction.x) * (thickness * 0.5)
-
-        let corners = [start + normal, end + normal, end - normal, start - normal].map(toDevice)
-        for index in [0, 1, 2, 0, 2, 3] {
-            vertices.append(Vertex(position: corners[index], uv: font.whiteTexelUV, color: color.linear))
-        }
+        fillPolygon([start + normal, end + normal, end - normal, start - normal], color: color, feather: feather)
     }
 
     /// An unfilled rectangle, drawn as four edges `thickness` wide, inside `origin` and `size`.
@@ -427,13 +426,36 @@ public final class HUDRenderer {
     /// With a large enough outer radius this is a circular vignette, which is how a scope's sight
     /// picture gets its surround. Drawn as a strip of quads rather than a triangle fan so it needs
     /// no index buffer and no separate primitive type: the whole interface stays one draw call.
+    ///
+    /// **Both edges feathered** over `feather` of the HUD's units, fading out beyond the outer radius and inside the
+    /// inner one (2026-10-28) — a ring's edge is all curve, and drawn bare it was a staircase all the way round, the
+    /// scope's surround most of all. Pass 0 for hard edges.
     public func fillRing(center: SIMD2<Float>,
                      innerRadius: Float,
                      outerRadius: Float,
                      segments: Int = 96,
-                     color: InterfaceColor) {
+                     color: InterfaceColor,
+                     feather: Float = 1) {
         guard outerRadius > innerRadius, segments >= 3, color.srgb.w > 0 else { return }
         let step = (2 * Float.pi) / Float(segments)
+        if feather > 0 {
+            var clear = color.linear
+            clear.w = 0
+            let solid = color.linear
+            // The fade strips: outward from the outer edge, inward from the inner one (never past the centre).
+            for (edge, beyond) in [(outerRadius, outerRadius + feather), (innerRadius, max(innerRadius - feather, 0))]
+            where edge > 0 || beyond > 0 {
+                for index in 0..<segments {
+                    let a0 = Float(index) * step, a1 = Float(index + 1) * step
+                    let d0 = SIMD2(cos(a0), sin(a0)), d1 = SIMD2(cos(a1), sin(a1))
+                    let quad = [(center + d0 * edge, solid), (center + d1 * edge, solid),
+                                (center + d1 * beyond, clear), (center + d0 * beyond, clear)]
+                    for k in [0, 1, 2, 0, 2, 3] {
+                        vertices.append(Vertex(position: toDevice(quad[k].0), uv: font.whiteTexelUV, color: quad[k].1))
+                    }
+                }
+            }
+        }
 
         for index in 0..<segments {
             let a0 = Float(index) * step
