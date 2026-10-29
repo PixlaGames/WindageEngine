@@ -12,7 +12,7 @@ public nonisolated enum Engine {
     /// **One source of truth**, and everything else formats it. A version that also lives in a
     /// window title, a build setting and a changelog is a version that will eventually disagree
     /// with itself, and the disagreement surfaces in a bug report from somebody else's machine.
-    public static let semanticVersion = SemanticVersion(major: 1, minor: 1, patch: 0)
+    public static let semanticVersion = SemanticVersion(major: 1, minor: 2, patch: 0)
 
     /// The version as `major.minor.patch`.
     public static var version: String { semanticVersion.description }
