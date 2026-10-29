@@ -4,7 +4,7 @@ Every release of Windage Engine, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0] — 2026-10-29
 
 ### Added
 
@@ -142,5 +142,6 @@ Every release of Windage Engine, newest first. Format follows
   `FrameRenderer.render(into:)`.
 - **A sample game** built only against the public API. `swift run WindageSample`.
 
+[1.2.0]: https://github.com/PixlaGames/WindageEngine/releases/tag/1.2.0
 [1.1.0]: https://github.com/PixlaGames/WindageEngine/releases/tag/1.1.0
 [1.0.0]: https://github.com/PixlaGames/WindageEngine/releases/tag/1.0.0
