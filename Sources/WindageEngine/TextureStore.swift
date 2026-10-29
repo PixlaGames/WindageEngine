@@ -91,7 +91,13 @@ public final class TextureStore {
     public var quality: GraphicsSettings.TextureQuality = .full {
         didSet { if quality != oldValue { cache.removeAll() } }
     }
-    public static let smallestReduced = 128
+    public nonisolated static let smallestReduced = 128
+
+    /// **Where textures compressed for the GPU are kept** (``CompressedTextures``) — nil, the default, loads images as
+    /// they are. Set, an image file is loaded through its ASTC 4×4 copy there, made the first time it is asked for: a
+    /// quarter of the memory, and later loads skip decoding the image. A tool sets it to a folder of its caches; a game
+    /// ships compressed files instead.
+    public var compressionCache: URL?
 
     /// A 1×1 opaque white, for binding where a material has no map.
     ///
@@ -183,6 +189,16 @@ public final class TextureStore {
             // Flips the image on the way in, so a bottom-left `v` lands where the file meant it to.
             .origin: origin.loaderOrigin.rawValue,
         ]
+
+        // Through the compressed copy, when there is a cache and the file is an image it can compress. A failure falls
+        // back to loading the image as it is: a texture is never lost to the cache.
+        if let folder = compressionCache, url.isFileURL, url.fragment(percentEncoded: false) == nil,
+           CompressedTextures.compressible.contains(url.pathExtension.lowercased()), let queue = uploadQueue,
+           let file = try? CompressedTextures.prepare(url, isColor: isColor, origin: origin, quality: quality, in: folder),
+           let texture = try? CompressedTextures.texture(fromKTX: file, device: device, queue: queue) {
+            cache[key] = texture
+            return texture
+        }
 
         do {
             let texture: MTLTexture
