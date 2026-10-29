@@ -440,12 +440,44 @@ public final class FrameRenderer {
         let options = MTL4CommitOptions()
         let clock = gpuClock, frame = frameIndex
         options.addFeedbackHandler { feedback in
-            clock.record(frame: frame, start: feedback.gpuStartTime, end: feedback.gpuEndTime)
+            if let error = feedback.error as NSError? {
+                clock.record(frame: frame, error: error)
+                NSLog("\(Engine.name): the GPU failed frame \(frame) — "
+                      + (clock.fault(forFrame: frame)?.description ?? error.localizedDescription))
+            } else {
+                clock.record(frame: frame, start: feedback.gpuStartTime, end: feedback.gpuEndTime)
+            }
         }
         commandQueue.commit([commandBuffer], options: options)
         lastFrameTimes.cpu = (stepsTook + CACurrentMediaTime() - encodeBegan) * 1000
         lastFrameTimes.gpu = gpuClock.latest
         stepsTook = 0
+    }
+
+    /// **Waits until `frame` has finished on the GPU, or the GPU has said it never will** (2026-10-29).
+    ///
+    /// The wait used to be for ever, saying "still waiting" each second. A game hung that way: two of its frames
+    /// page-faulted as it started, macOS then refused every later submission (`accessRevoked`), and nothing
+    /// committed after that ever signals — the log said "still waiting" for minutes, and the faults that explained
+    /// it were only in the system log. Now Metal's report of a failed frame is read (``commitTimed()``):
+    /// - **a frame that failed is not waited for** — the GPU has dropped it, and its slot is free;
+    /// - **once Metal has revoked the process's access, the app stops with the first fault as the reason**, since no frame
+    ///   will draw again. A hang with nothing on screen is worse than a stop that says why.
+    /// Checked every 100 ms, so a failed frame costs a tenth of a second rather than the whole timeout; "still waiting"
+    /// is said once each `timeoutMS`.
+    private func waitForGPU(frame: Int, timeoutMS: Int, waiting: String) {
+        var waited = 0
+        while !endFrameEvent.wait(untilSignaledValue: UInt64(frame), timeoutMS: 100) {
+            if let fault = gpuClock.fault(forFrame: frame) {
+                if fault.revoked {
+                    let cause = gpuClock.first.map { "frame \($0.frame): \($0.description)" } ?? fault.description
+                    fatalError("\(Engine.name): macOS has stopped running this app's GPU work after a fault in \(cause)")
+                }
+                return
+            }
+            waited += 100
+            if waited % timeoutMS == 0 { NSLog("\(Engine.name): \(waiting)") }
+        }
     }
 
     /// The GPU time of a frame drawn into a texture, which has finished — waiting briefly for Metal's report of it, which
@@ -734,9 +766,8 @@ public final class FrameRenderer {
         guard let depthTexture, let sceneTexture else { return }
 
         let previousValueToWaitFor = frameIndex - FrameRenderer.maxFramesInFlight
-        while !endFrameEvent.wait(untilSignaledValue: UInt64(previousValueToWaitFor), timeoutMS: 1000) {
-            NSLog("\(Engine.name): GPU has not completed frame \(previousValueToWaitFor) after 1 s; still waiting.")
-        }
+        waitForGPU(frame: previousValueToWaitFor, timeoutMS: 1000,
+                   waiting: "GPU has not completed frame \(previousValueToWaitFor) after 1 s; still waiting.")
         let frameSlot = frameIndex % FrameRenderer.maxFramesInFlight
         encodeBegan = CACurrentMediaTime()
         let allocator = commandAllocators[frameSlot]
@@ -757,9 +788,8 @@ public final class FrameRenderer {
         commandQueue.signalEvent(endFrameEvent, value: UInt64(frameIndex))
         frameIndex += 1
         // Nothing presents this one, so nothing else will wait for it: wait here.
-        while !endFrameEvent.wait(untilSignaledValue: UInt64(frameIndex - 1), timeoutMS: 5000) {
-            NSLog("\(Engine.name): the GPU has not finished the frame asked for into a texture.")
-        }
+        waitForGPU(frame: frameIndex - 1, timeoutMS: 5000,
+                   waiting: "the GPU has not finished the frame asked for into a texture.")
     }
 
     private func render(to drawable: CAMetalDrawable, interpolation alpha: Float) {
@@ -771,9 +801,8 @@ public final class FrameRenderer {
         // through and resets an allocator whose commands may still be executing — undefined
         // behaviour rather than a dropped frame.
         let previousValueToWaitFor = frameIndex - FrameRenderer.maxFramesInFlight
-        while !endFrameEvent.wait(untilSignaledValue: UInt64(previousValueToWaitFor), timeoutMS: 1000) {
-            NSLog("WindageEngine: GPU has not completed frame \(previousValueToWaitFor) after 1 s; still waiting.")
-        }
+        waitForGPU(frame: previousValueToWaitFor, timeoutMS: 1000,
+                   waiting: "GPU has not completed frame \(previousValueToWaitFor) after 1 s; still waiting.")
 
         let frameSlot = frameIndex % FrameRenderer.maxFramesInFlight
         encodeBegan = CACurrentMediaTime()
