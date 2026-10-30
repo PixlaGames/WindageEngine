@@ -46,7 +46,7 @@ swift run WindageSample
 - **Light and shadow** — cascaded sun shadows; spot and point lights, clustered, each able to cast
 - **Meshes** — USD through Model I/O, and glTF / GLB with meshopt, Draco and KTX2 compression
 - **Many copies** — instanced drawing, frustum culling and automatic level of detail
-- **Characters** — skinned animation from USD, cross-fades, attachments, and a character controller
+- **Characters** — skinned animation from USD, skinned once a frame on the GPU, clips mixed and strides aligned, attachments, and a character controller
 - **Input** — keyboard, mouse and game controllers, with rebindable actions
 - **Audio, particles, a HUD, levels and saving**
 

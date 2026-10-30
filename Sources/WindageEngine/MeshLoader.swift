@@ -156,7 +156,7 @@ public nonisolated enum MeshLoader {
     /// tell which incoming attribute is a position and which is a normal, and the conversion
     /// silently produces zeroes — which renders as an unlit black scene, with nothing thrown and
     /// nothing logged. Naming every attribute the descriptor declares is not optional.
-    private static func namedDescriptor(_ vertexDescriptor: MTLVertexDescriptor, semantics: [Int: String],
+    static func namedDescriptor(_ vertexDescriptor: MTLVertexDescriptor, semantics: [Int: String],
                                         file name: String) throws -> MDLVertexDescriptor {
         let modelDescriptor = MTKModelIOVertexDescriptorFromMetal(vertexDescriptor)
         guard let attributes = modelDescriptor.attributes as? [MDLVertexAttribute] else {

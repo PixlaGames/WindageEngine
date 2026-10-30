@@ -319,3 +319,26 @@ public final class TextureStore {
     /// shader bug.** Call this after loading a level's materials and commit residency.
     public var allocations: [any MTLAllocation] { Array(cache.values) + [white, flatNormal] }
 }
+
+public nonisolated extension TextureSource {
+    /// **The image's own bytes**, from a file or from inside a `.usdz` (``Material`` names a packed texture as the
+    /// package's URL with the entry as its fragment) — for a game that does something of its own with an image
+    /// rather than handing it to ``TextureStore``: enlarging a 32-texel palette without filtering, say.
+    /// - Parameter bundle: where a ``named(_:)`` source is looked for.
+    func contents(in bundle: Bundle = .main) throws -> Data {
+        switch self {
+        case .url(let url):
+            if url.isFileURL, url.pathExtension.lowercased() == "usdz", let entry = url.fragment(percentEncoded: false) {
+                var package = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                package?.fragment = nil
+                return try USDZArchive.entry(entry, in: package?.url ?? url)
+            }
+            return try Data(contentsOf: url)
+        case .named(let name):
+            guard let url = bundle.url(forResource: name, withExtension: nil) else {
+                throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: name])
+            }
+            return try Data(contentsOf: url)
+        }
+    }
+}

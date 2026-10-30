@@ -631,6 +631,9 @@ public final class FrameRenderer {
         // them yet, came out differently on every run: shadows from another run's memory, or a black
         // scene. Found by drawing a frame into a texture with no window (2026-09-11).
         encoder.barrier(afterQueueStages: .fragment, beforeStages: .fragment, visibilityOptions: .device)
+        // **Wait for skinning** (``SkinningPass``): a character drawn here reads vertices a compute pass wrote this
+        // frame, and Metal 4 orders nothing between passes unasked.
+        encoder.barrier(afterQueueStages: .dispatch, beforeStages: .vertex, visibilityOptions: .device)
         game.encode(into: encoder, frameSlot: frameSlot, interpolation: interpolation)
         encoder.endEncoding()
         guard twoPasses, let opaqueColour = opaqueColourTexture, let opaqueDepth = opaqueDepthTexture else { return true }

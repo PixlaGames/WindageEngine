@@ -216,6 +216,9 @@ public final class ShadowAtlas {
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
         encoder.label = "Shadow Atlas"
+        // **Wait for skinning** (``SkinningPass``): a character drawn here reads vertices a compute pass wrote this
+        // frame, and Metal 4 orders nothing between passes unasked.
+        encoder.barrier(afterQueueStages: .dispatch, beforeStages: .vertex, visibilityOptions: .device)
 
         // **Front-face culling**, as in the cascade pass: recording the back of an occluder pushes
         // the stored depth away from the lit surface and removes most acne before any bias.

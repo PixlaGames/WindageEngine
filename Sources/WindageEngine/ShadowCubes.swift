@@ -296,6 +296,8 @@ public final class ShadowCubes {
                 guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor)
                 else { continue }
                 encoder.label = "Shadow Cube \(caster.slot) Face \(face)"
+                // **Wait for skinning** (``SkinningPass``), as every pass that may draw a character does.
+                encoder.barrier(afterQueueStages: .dispatch, beforeStages: .vertex, visibilityOptions: .device)
 
                 // Front-face culling, as in the cascades and the atlas: recording the *back* of an
                 // occluder removes most acne before any bias.

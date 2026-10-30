@@ -126,6 +126,74 @@ public nonisolated struct SkeletonPose: Sendable {
         refresh()
     }
 
+    /// Poses the rig from any number of clips, each by its weight — a walk easing into a run while a jump fades out.
+    ///
+    /// **Weights are relative**: they are divided by their sum, so three clips at 1, 1 and 2 are a quarter, a quarter and
+    /// a half. Layers at zero weight are skipped; with nothing left to weigh, the rig stands at rest.
+    ///
+    /// ### Summed and normalised, not slerped pairwise
+    ///
+    /// Each joint's rotation is the weighted sum of the layers' quaternions, made unit length again. For two poses a
+    /// hair apart — which is what a walk and an idle are — this agrees with ``set(to:blendedWith:weight:)``'s slerp to
+    /// within a fraction of a degree, and unlike a slerp it takes three clips or ten without becoming a nest of them.
+    /// Translations and scales are the weighted average.
+    ///
+    /// **Every quaternion is turned into the first layer's hemisphere before it is added.** `q` and `−q` are the same
+    /// rotation, and an exporter may write either; added together they cancel, which draws as limbs collapsing into the
+    /// body exactly where the blend is half and half. **And a sum can still cancel** — two poses genuinely half a turn
+    /// apart do, however they are signed — so a joint whose sum comes out as nothing takes the heaviest layer's rotation
+    /// rather than normalising zero into NaN: a NaN matrix becomes NaN vertices, and that faults the GPU somewhere far
+    /// from here. Both were found the hard way in a game's own hand-written blend, which this is extracted from.
+    ///
+    /// Every playhead must have been made for this pose's skeleton, as for ``set(to:)``. Allocates nothing.
+    public mutating func set(mixing layers: [(playhead: AnimationPlayhead, weight: Float)]) {
+        var total: Float = 0
+        var heaviest = -1
+        for (index, layer) in layers.enumerated() where layer.weight > 0 {
+            checkBinding(of: layer.playhead, role: "mixed playhead")
+            total += layer.weight
+            if heaviest < 0 || layer.weight > layers[heaviest].weight { heaviest = index }
+        }
+        guard total > 0 else {
+            for joint in 0..<skeleton.jointCount {
+                localTransforms[joint] = JointTransform(matrix: skeleton.restTransforms[joint])
+            }
+            refresh()
+            return
+        }
+
+        for joint in 0..<skeleton.jointCount {
+            let rest = JointTransform(matrix: skeleton.restTransforms[joint])
+            var translation = SIMD3<Float>.zero
+            var scale = SIMD3<Float>.zero
+            var rotation = SIMD4<Float>.zero
+            var reference: SIMD4<Float>?
+            var heaviestRotation = rest.rotation
+            for (index, layer) in layers.enumerated() where layer.weight > 0 {
+                let sampled = layer.playhead.binding.clipJointIndices[joint].map {
+                    layer.playhead.clip.sample(joint: $0, at: layer.playhead.sampleTime, rest: rest)
+                } ?? rest
+                let w = layer.weight / total
+                translation += sampled.translation * w
+                scale += sampled.scale * w
+                var q = sampled.rotation.vector
+                if let reference {
+                    if simd_dot(q, reference) < 0 { q = -q }
+                } else {
+                    reference = q
+                }
+                rotation += q * w
+                if index == heaviest { heaviestRotation = sampled.rotation }
+            }
+            let length = simd_length(rotation)
+            localTransforms[joint] = JointTransform(
+                translation: translation,
+                rotation: length > 1e-4 ? simd_quatf(vector: rotation / length) : heaviestRotation,
+                scale: scale)
+        }
+        refresh()
+    }
+
     /// Poses the rig directly, for anything that is not a clip — a procedural head turn, a ragdoll,
     /// a rig driven by a solver. One transform per joint, joint-local, in the skeleton's order.
     public mutating func set(to newValue: [JointTransform]) {

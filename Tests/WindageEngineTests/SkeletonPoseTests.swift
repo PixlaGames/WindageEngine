@@ -125,6 +125,62 @@ struct SkeletonPoseTests {
         _ = still
     }
 
+    /// One clip, then three: the mix is the weighted average, and weights are relative.
+    @Test("A mix of clips lands where their weights put it")
+    func mixIsWeighted() throws {
+        let skeleton = try SkeletonTests.offsetRig()
+        var pose = SkeletonPose(skeleton: skeleton)
+        let clip = try AnimationClipTests.swing(jointPaths: ["root/mid"])
+        let still = AnimationPlayhead(clip: clip, skeleton: skeleton)
+        var swung = AnimationPlayhead(clip: clip, skeleton: skeleton)
+        swung.advance(by: 1)
+
+        // Alone, it is the clip.
+        pose.set(mixing: [(swung, 1)])
+        #expect(abs(pose.localTransforms[1].rotation.angle - .pi / 2) < 1e-4)
+        // Half and half agrees with the two-clip cross-fade.
+        pose.set(mixing: [(still, 2), (swung, 2)])
+        #expect(abs(pose.localTransforms[1].rotation.angle - .pi / 4) < 1e-3)
+        // Three layers, two of them the same pose: three quarters of the way, the summed and normalised quaternion's
+        // angle — which is not exactly 3/4 of the arc, and is within a degree of it.
+        pose.set(mixing: [(still, 1), (swung, 1.5), (swung, 1.5)])
+        #expect(abs(pose.localTransforms[1].rotation.angle - 3 * .pi / 8) < 0.02)
+        // The joint no clip drives stays at rest.
+        #expect(simd_distance(pose.modelTransform(ofJoint: 0).columns.3, SIMD4(5, 0, 0, 1)) < 1e-5)
+        // Nothing weighted: at rest.
+        pose.set(mixing: [(swung, 0)])
+        #expect(pose.localTransforms[1].rotation.angle < 1e-4)
+    }
+
+    /// **`q` and `−q` are the same rotation**, and added unaligned they cancel to nothing — the limbs-collapsing
+    /// fault. A mix of a pose and the same pose with its quaternion's sign flipped must be that pose.
+    @Test("A mix aligns signs, and a sum that cancels takes the heaviest layer")
+    func mixAlignsHemispheres() throws {
+        let skeleton = try SkeletonTests.offsetRig()
+        var pose = SkeletonPose(skeleton: skeleton)
+        func held(_ q: simd_quatf) throws -> AnimationClip {
+            try AnimationClip(name: "held", jointPaths: ["root/mid"], translation: .empty(jointCount: 1),
+                              rotation: JointTrack(times: [0, 1], values: [q, q], jointCount: 1),
+                              scale: .empty(jointCount: 1))
+        }
+        let quarter = simd_quatf(angle: .pi / 2, axis: SIMD3(0, 0, 1))
+        let plus = AnimationPlayhead(clip: try held(quarter), skeleton: skeleton)
+        let minus = AnimationPlayhead(clip: try held(simd_quatf(vector: -quarter.vector)), skeleton: skeleton)
+        pose.set(mixing: [(plus, 1), (minus, 1)])
+        #expect(abs(pose.localTransforms[1].rotation.angle - .pi / 2) < 1e-4
+                || abs(pose.localTransforms[1].rotation.angle - 3 * .pi / 2) < 1e-4)
+        #expect(pose.skinningMatrices.allSatisfy { m in (0..<4).allSatisfy { m[$0].x.isFinite } })
+
+        // **A sum that still cancels**: two half turns about X, opposite in sign and both square to a barely weighted
+        // identity, so the alignment to it flips neither. Their sum is nothing; the heaviest layer is taken, not NaN.
+        let identity = AnimationPlayhead(clip: try held(simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)), skeleton: skeleton)
+        let over = AnimationPlayhead(clip: try held(simd_quatf(ix: 1, iy: 0, iz: 0, r: 0)), skeleton: skeleton)
+        let under = AnimationPlayhead(clip: try held(simd_quatf(ix: -1, iy: 0, iz: 0, r: 0)), skeleton: skeleton)
+        pose.set(mixing: [(identity, 0.00001), (over, 1), (under, 0.99)])
+        #expect(pose.skinningMatrices.allSatisfy { m in (0..<4).allSatisfy { m[$0].x.isFinite && m[$0].y.isFinite } })
+        #expect(abs(abs(pose.localTransforms[1].rotation.vector.x) - 1) < 1e-4)
+    }
+
     @Test("A one-shot finishes and a loop does not")
     func playheadReportsFinishing() throws {
         let skeleton = try SkeletonTests.offsetRig()

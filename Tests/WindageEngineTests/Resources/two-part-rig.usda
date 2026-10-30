@@ -1,0 +1,182 @@
+#usda 1.0
+# A character in two parts on one skeleton, used by SkinnedModelTests — the shape a character
+# creator exports: every part its own skinned mesh, all bound to one skeleton, in metres, Y up.
+#
+# **Two parts, two materials, and a third mesh sharing the first's material**, so merging them has to
+# keep each part's vertices with its own triangles, and group triangles by what they are made of.
+#
+# The root sits at (0, 0, 0) and the arm joint at (0, 1, 0). The body is a quad below the arm joint,
+# weighted to the root; the arm is a quad above it, weighted to the arm joint; the band is a quad
+# across the joint, half and half — so a turn of the arm joint moves the arm fully and the band
+# halfway, and leaves the body where it was.
+(
+    defaultPrim = "Character"
+    metersPerUnit = 1
+    upAxis = "Y"
+    timeCodesPerSecond = 24
+    startTimeCode = 0
+    endTimeCode = 24
+)
+
+def SkelRoot "Character" (
+    prepend apiSchemas = ["SkelBindingAPI"]
+)
+{
+    def Skeleton "Skeleton" (
+        prepend apiSchemas = ["SkelBindingAPI"]
+    )
+    {
+        uniform matrix4d[] bindTransforms = [( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1) ), ( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,1,0,1) )]
+        uniform token[] joints = ["root", "root/arm"]
+        uniform matrix4d[] restTransforms = [( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1) ), ( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,1,0,1) )]
+        rel skel:animationSource = </Character/Animations/Raise>
+    }
+
+    def Scope "Animations"
+    {
+        def SkelAnimation "Raise"
+        {
+            uniform token[] joints = ["root", "root/arm"]
+            quatf[] rotations.timeSamples = {
+                0: [(1,0,0,0), (1,0,0,0)],
+                24: [(1,0,0,0), (0.7071068,0,0,0.7071068)],
+            }
+            half3[] scales.timeSamples = {
+                0: [(1,1,1), (1,1,1)],
+                24: [(1,1,1), (1,1,1)],
+            }
+            float3[] translations.timeSamples = {
+                0: [(0,0,0), (0,1,0)],
+                24: [(0,0,0), (0,1,0)],
+            }
+        }
+
+        def SkelAnimation "Lower"
+        {
+            uniform token[] joints = ["root", "root/arm"]
+            quatf[] rotations.timeSamples = {
+                0: [(1,0,0,0), (1,0,0,0)],
+                24: [(1,0,0,0), (0.7071068,0,0,-0.7071068)],
+            }
+            half3[] scales.timeSamples = {
+                0: [(1,1,1), (1,1,1)],
+                24: [(1,1,1), (1,1,1)],
+            }
+            float3[] translations.timeSamples = {
+                0: [(0,0,0), (0,1,0)],
+                24: [(0,0,0), (0,1,0)],
+            }
+        }
+    }
+    rel skel:skeleton = </Character/Skeleton>
+
+    def Mesh "Body" (
+        prepend apiSchemas = ["SkelBindingAPI", "MaterialBindingAPI"]
+    )
+    {
+        float3[] extent = [(-0.5, 0, 0), (0.5, 1, 0)]
+        int[] faceVertexCounts = [3, 3]
+        int[] faceVertexIndices = [0, 1, 2, 0, 2, 3]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "vertex"
+        )
+        point3f[] points = [(-0.5, 0, 0), (0.5, 0, 0), (0.5, 1, 0), (-0.5, 1, 0)]
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (
+            interpolation = "vertex"
+        )
+        int[] primvars:skel:jointIndices = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (
+            elementSize = 4
+            interpolation = "vertex"
+        )
+        float[] primvars:skel:jointWeights = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] (
+            elementSize = 4
+            interpolation = "vertex"
+        )
+        matrix4d primvars:skel:geomBindTransform = ( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1) )
+        rel material:binding = </Character/Materials/Cloth>
+        uniform token subdivisionScheme = "none"
+    }
+
+    def Mesh "Arm" (
+        prepend apiSchemas = ["SkelBindingAPI", "MaterialBindingAPI"]
+    )
+    {
+        float3[] extent = [(-0.1, 1, 0), (0.1, 2, 0)]
+        int[] faceVertexCounts = [3, 3]
+        int[] faceVertexIndices = [0, 1, 2, 0, 2, 3]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "vertex"
+        )
+        point3f[] points = [(-0.1, 1, 0), (0.1, 1, 0), (0.1, 2, 0), (-0.1, 2, 0)]
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (
+            interpolation = "vertex"
+        )
+        int[] primvars:skel:jointIndices = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] (
+            elementSize = 4
+            interpolation = "vertex"
+        )
+        float[] primvars:skel:jointWeights = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] (
+            elementSize = 4
+            interpolation = "vertex"
+        )
+        matrix4d primvars:skel:geomBindTransform = ( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1) )
+        rel material:binding = </Character/Materials/Plate>
+        uniform token subdivisionScheme = "none"
+    }
+
+    def Mesh "Band" (
+        prepend apiSchemas = ["SkelBindingAPI", "MaterialBindingAPI"]
+    )
+    {
+        float3[] extent = [(-0.2, 0.9, 0), (0.2, 1.1, 0)]
+        int[] faceVertexCounts = [3, 3]
+        int[] faceVertexIndices = [0, 1, 2, 0, 2, 3]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "vertex"
+        )
+        point3f[] points = [(-0.2, 0.9, 0), (0.2, 0.9, 0), (0.2, 1.1, 0), (-0.2, 1.1, 0)]
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (
+            interpolation = "vertex"
+        )
+        int[] primvars:skel:jointIndices = [0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0] (
+            elementSize = 4
+            interpolation = "vertex"
+        )
+        float[] primvars:skel:jointWeights = [0.5, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0.5, 0.5, 0, 0] (
+            elementSize = 4
+            interpolation = "vertex"
+        )
+        matrix4d primvars:skel:geomBindTransform = ( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1) )
+        rel material:binding = </Character/Materials/Cloth>
+        uniform token subdivisionScheme = "none"
+    }
+
+    def Scope "Materials"
+    {
+        def Material "Cloth"
+        {
+            token outputs:surface.connect = </Character/Materials/Cloth/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.8, 0.1, 0.1)
+                float inputs:roughness = 0.9
+                token outputs:surface
+            }
+        }
+
+        def Material "Plate"
+        {
+            token outputs:surface.connect = </Character/Materials/Plate/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.7, 0.7, 0.7)
+                float inputs:metallic = 1
+                token outputs:surface
+            }
+        }
+    }
+}

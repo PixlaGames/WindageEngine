@@ -404,6 +404,9 @@ public final class ShadowMap {
 
             guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { continue }
             encoder.label = "Shadow Cascade \(cascade)"
+            // **Wait for skinning** (``SkinningPass``): a character drawn here reads vertices a compute pass wrote this
+            // frame, and Metal 4 orders nothing between passes unasked.
+            encoder.barrier(afterQueueStages: .dispatch, beforeStages: .vertex, visibilityOptions: .device)
 
             // **Front-face culling.** Recording the *back* of an occluder pushes the stored depth
             // away from the lit surface, which removes most shadow acne before any bias is applied.

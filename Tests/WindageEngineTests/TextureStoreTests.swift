@@ -270,3 +270,18 @@ struct TextureStoreTests {
         #expect(try store.texture(.url(small), isColor: false).width == 64, "a small image stays whole")
     }
 }
+
+/// **A texture's own bytes, wherever it is** — a file, or an entry inside a `.usdz` named as the package's URL with the
+/// entry as its fragment, the way ``Material`` names one.
+struct TextureSourceContentsTests {
+    @Test("An image packed in a .usdz reads back as its own bytes")
+    func packedImage() throws {
+        let package = try #require(Bundle.module.url(forResource: "textured-quad-packed", withExtension: "usdz"))
+        var components = try #require(URLComponents(url: package, resolvingAgainstBaseURL: false))
+        components.fragment = "textures/material-map.png"
+        let packed = try TextureSource.url(try #require(components.url)).contents()
+        let loose = try #require(Bundle.module.url(forResource: "material-map", withExtension: "png"))
+        #expect(packed == (try Data(contentsOf: loose)))
+        #expect(throws: (any Error).self) { try TextureSource.named("not-a-texture.png").contents(in: .module) }
+    }
+}
