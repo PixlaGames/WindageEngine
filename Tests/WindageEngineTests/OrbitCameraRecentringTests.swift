@@ -120,18 +120,19 @@ struct OrbitCameraRecentringTests {
         #expect(abs(camera.pitch - camera.tuning.restingPitch) < 0.05)
     }
 
-    /// **The pitch and the field of view are one decision.** At a 45° field of view 12° puts the
-    /// horizon three quarters of the way down, and the camera reads as staring at the ground; 7° puts
-    /// it at 66%. At 65°, 12° was right. So this asserts where the horizon falls, not either number —
-    /// a change to one that forgets the other fails here.
+    /// **The pitch and the field of view are one decision.** At a 45° field of view 12° fills three
+    /// quarters of the frame with ground, the horizon near the top, and the camera reads as staring at
+    /// the ground; 7° fills two thirds. At 65°, 12° was right. So this asserts where the horizon falls,
+    /// not either number — a change to one that forgets the other fails here.
     @Test("The resting pitch leaves the horizon about a third down the frame")
     func restingPitchFramesTheHorizon() {
         let camera = OrbitCamera()
         let fov = Float.degrees(fromRadians: camera.fieldOfView)
         let pitch = Float.degrees(fromRadians: camera.tuning.restingPitch)
-        let horizonFromTop = (pitch + fov / 2) / fov
-        #expect(horizonFromTop > 0.6 && horizonFromTop < 0.75,
-                "horizon sits \(horizonFromTop * 100)% down the frame")
+        // The view's centre is `pitch` below the horizon, so this much of the frame lies under it.
+        let belowHorizon = (pitch + fov / 2) / fov
+        #expect(belowHorizon > 0.6 && belowHorizon < 0.75,
+                "the horizon sits \((1 - belowHorizon) * 100)% down the frame")
     }
 
     /// **A camera that begins life believing it was just touched** would sit still for the first

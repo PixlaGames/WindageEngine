@@ -50,10 +50,11 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
         /// Where the pitch eases back to, in radians.
         ///
         /// **7°, and this number could not be decided on its own.** A resting pitch is only meaningful against a
-        /// field of view: what the player sees is where the *horizon* falls in the frame, and that is
-        /// `(pitch + fov/2) / fov`. At the default 45° field of view, 7° puts the horizon **66%** of the way down the
-        /// frame. 12° — right for this camera when it had a 65° field of view, where it put the horizon at 68% —
-        /// puts it **77%** down at 45°: a camera that insists on staring at the ground.
+        /// field of view: what the player sees is where the *horizon* falls in the frame — the view's centre is
+        /// `pitch` below it, so `(pitch + fov/2) / fov` of the frame lies under the horizon, ground. At the default 45°
+        /// field of view, 7° gives the ground **66%** of the frame, the horizon a third of the way down. 12° — right for
+        /// this camera when it had a 65° field of view, where it gave the ground 68% — gives it **77%** at 45°, the
+        /// horizon near the top: a camera that insists on staring at the ground.
         ///
         /// **The lesson is the pairing, not either number.** Changing one of these without the other is how this went
         /// wrong in both directions; the tests assert the horizon, not the pitch.
@@ -136,8 +137,13 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
     /// recentre here goes the short way round whatever its value.
     public var yaw: Float = 0
 
-    /// Positive tilts the camera up and the view down. Clamped in ``orbit(byYaw:pitch:)``.
-    public var pitch: Float = 12 * .pi / 180
+    /// Positive tilts the camera up and the view down. Clamped in ``orbit(byYaw:pitch:)``. Starts at
+    /// ``Tuning/restingPitch``.
+    ///
+    /// **The first view is the resting view** (owner, 2026-10-31). It opened at 12° while resting at 7° — the 12° left
+    /// from a 65° field of view — so a player arrived looking at the ground, and the camera tilted up the first time
+    /// they ran forward.
+    public var pitch: Float
 
     /// What the player asked for, with the wheel or the triggers. Starts at ``Tuning/restingDistance``.
     ///
@@ -182,6 +188,7 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
 
     public init(tuning: Tuning = Tuning()) {
         self.tuning = tuning
+        pitch = tuning.restingPitch
         distance = tuning.restingDistance
         clearance = tuning.distanceRange.upperBound
     }

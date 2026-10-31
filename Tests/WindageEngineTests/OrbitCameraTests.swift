@@ -94,11 +94,20 @@ struct OrbitCameraTests {
                 == simd_float4x4(perspectiveFovY: camera.fieldOfView, aspectRatio: 1.6, nearZ: camera.nearPlane))
     }
 
-    @Test("A fresh camera sits at its resting distance, with the scenery letting it")
+    /// **The first view is the resting view**: a camera that opens somewhere else tilts or zooms by itself the first
+    /// time the player runs forward and it eases home.
+    @Test("A fresh camera sits at its resting pitch and distance, with the scenery letting it")
     func opensAtRest() {
-        let camera = OrbitCamera(tuning: OrbitCamera.Tuning(distanceRange: 3...12, restingDistance: 8))
+        let camera = OrbitCamera(tuning: OrbitCamera.Tuning(distanceRange: 3...12, restingPitch: 0.2, restingDistance: 8))
+        #expect(camera.pitch == 0.2)
         #expect(camera.distance == 8)
         #expect(camera.workingDistance == 8)
         #expect(camera.clearance == 12)
+
+        // So easing home from a fresh camera moves nothing.
+        var running = OrbitCamera()
+        let opened = running.position
+        for _ in 0..<120 { running.recentre(behind: 0, deltaTime: 1.0 / 60, active: true) }
+        #expect(simd_distance(running.position, opened) < 1e-5)
     }
 }
