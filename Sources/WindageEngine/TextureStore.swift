@@ -277,6 +277,15 @@ public final class TextureStore {
     /// For uploading reduced textures — made when the first is.
     private lazy var uploadQueue: MTLCommandQueue? = device.makeCommandQueue()
 
+    /// **Takes a texture made elsewhere** — off the main thread, typically from ``CompressedTextures`` — as the one this
+    /// store hands out for `source` read that way, so asking for it later costs nothing. A game loading a world in the
+    /// background makes its textures there and adopts them here, rather than leaving every one to load on the main actor
+    /// when it is first drawn: 127 textures that way froze a window for seven seconds. It must be what ``texture(_:isColor:origin:bundle:)``
+    /// would have made — the same file, the same colour space and way up, at ``quality``.
+    public func adopt(_ texture: MTLTexture, for source: TextureSource, isColor: Bool, origin: TextureOrigin = .bottomLeft) {
+        cache[Key(source: source, isColor: isColor, origin: origin)] = texture
+    }
+
     /// Drops every texture loaded from `file` — or from inside it, for a `.usdz` — so the next request reads the
     /// file again. For a tool whose files change on disk while it runs: an editor reloading a prop someone exported
     /// over. A game, whose files do not change, never needs it.

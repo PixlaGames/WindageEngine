@@ -91,6 +91,40 @@ struct CompressedTexturesTests {
         #expect(near(bottom, 204, 89, 51), "the new bottom, red: \(bottom)")
     }
 
+    /// **Keyed by contents**: the same file copied somewhere else — into a game's bundle — is the cache's same entry; other
+    /// pixels, or the same file read as data, are not.
+    @Test func aCopyElsewhereIsTheSameEntryAndOtherPixelsAreNot() throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = try picture(64, 64, top: red, bottom: blue)
+        let elsewhere = folder.appending(path: "bundle/Props")
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        let copy = elsewhere.appending(path: url.lastPathComponent)
+        try FileManager.default.copyItem(at: url, to: copy)
+        #expect(try CompressedTextures.key(copy, isColor: true, origin: .bottomLeft, quality: .full)
+                == CompressedTextures.key(url, isColor: true, origin: .bottomLeft, quality: .full))
+        let other = try picture(64, 64, top: blue, bottom: red)
+        #expect(try CompressedTextures.key(other, isColor: true, origin: .bottomLeft, quality: .full)
+                != CompressedTextures.key(url, isColor: true, origin: .bottomLeft, quality: .full))
+        #expect(try CompressedTextures.key(url, isColor: false, origin: .bottomLeft, quality: .full)
+                != CompressedTextures.key(url, isColor: true, origin: .bottomLeft, quality: .full))
+    }
+
+    /// Asking whether a cache has a texture makes nothing; once made, it is found — from a copy anywhere (a copy keeps its
+    /// name, which the cached file is named after).
+    @Test func cachedFindsWithoutMaking() throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = try picture(64, 64, top: red, bottom: blue)
+        let cache = folder.appending(path: "cache")
+        #expect(CompressedTextures.cached(url, isColor: true, in: cache) == nil)
+        #expect(!FileManager.default.fileExists(atPath: cache.path), "nothing made")
+        let made = try CompressedTextures.prepare(url, isColor: true, in: cache)
+        let elsewhere = folder.appending(path: "bundle")
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        let copy = elsewhere.appending(path: url.lastPathComponent)
+        try FileManager.default.copyItem(at: url, to: copy)
+        #expect(CompressedTextures.cached(copy, isColor: true, in: cache) == made)
+    }
+
     @Test func manyThreadsAskingForOneTextureMakeItOnce() throws {
         defer { try? FileManager.default.removeItem(at: folder) }
         let url = try picture(1024, 1024, top: red, bottom: blue)
@@ -120,5 +154,18 @@ struct CompressedTexturesTests {
         store.compressionCache = nil
         store.quality = .full
         #expect(try store.texture(.url(url), isColor: true).pixelFormat != .astc_4x4_srgb)
+    }
+
+    /// A texture made off the main thread and adopted is the one handed out — nothing loaded again.
+    @Test func anAdoptedTextureIsTheOneHandedOut() throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return }
+        let store = try TextureStore(device: device)
+        let url = try picture(64, 64, top: red, bottom: blue)
+        let made = try CompressedTextures.texture(fromKTX: CompressedTextures.prepare(url, isColor: true, in: folder.appending(path: "cache")),
+                                                  device: device, queue: queue)
+        store.adopt(made, for: .url(url), isColor: true)
+        #expect(try store.texture(.url(url), isColor: true) === made)
+        #expect(try store.texture(.url(url), isColor: false) !== made, "read as data, it is another texture")
     }
 }

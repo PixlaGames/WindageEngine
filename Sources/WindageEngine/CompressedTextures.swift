@@ -14,8 +14,14 @@ import Metal
 /// A texture loaded from a PNG is held uncompressed: four bytes a pixel, a third more for its mips. A 4096² atlas is
 /// 85 MB that way, and 21 MB as ASTC 4×4, which every Apple GPU samples directly at the same resolution. The cost is the
 /// encoding — about 1.5 s for that atlas and its mips — so it is done the first time a texture is asked for and the
-/// result kept, keyed by the file's path, size and modification date and by how it is read; a changed file is
-/// compressed again. Unity's import cache, for the same reason.
+/// result kept, keyed by **the file's contents** and by how it is read; a changed file is compressed again. Unity's
+/// import cache, for the same reason.
+///
+/// **By contents, not by path** (2026-10-31). Keyed by where the file was, the same pack copied into a game's bundle —
+/// and that bundle built into a Debug folder, a Release folder and an archive — was compressed again in each, the copy's
+/// first load taking ten seconds more; and a tool could not make the cache a game ships, because the game's copies sit
+/// elsewhere. A file's contents are the same wherever it is copied, so a cache made beside the originals serves every
+/// copy that keeps its name (the cached file is named after the image, for whoever looks in the folder). The cost is reading the file once per launch to hash it (remembered by path, size and date after that).
 ///
 /// **macOS's own encoder.** ImageIO writes ASTC — but only into a `.astc` file, one image without mips; asked for KTX it
 /// writes uncompressed pixels and ignores the request. So each mip level is made here, encoded on its own, and the levels
@@ -60,15 +66,37 @@ public nonisolated enum CompressedTextures {
         return file
     }
 
-    /// The cache's name for a texture: its file as it is now, and how it is read. A version in it retires old files.
+    /// **The cached file for an image, if that cache already has it** — nothing made. For a cache that cannot be written:
+    /// a game's bundle carrying the compressed copies a tool made, read first, with a writable cache behind it for
+    /// anything missing.
+    public static func cached(_ url: URL, isColor: Bool, origin: TextureOrigin = .bottomLeft,
+                              quality: GraphicsSettings.TextureQuality = .full, in cache: URL) -> URL? {
+        guard let name = try? key(url, isColor: isColor, origin: origin, quality: quality) else { return nil }
+        let file = cache.appending(path: name + ".ktx")
+        return FileManager.default.fileExists(atPath: file.path) ? file : nil
+    }
+
+    /// The cache's name for a texture: its file's contents, and how it is read. A version in it retires old files.
     static func key(_ url: URL, isColor: Bool, origin: TextureOrigin, quality: GraphicsSettings.TextureQuality) throws -> String {
-        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-        let size = (attributes[.size] as? Int) ?? 0
-        let modified = (attributes[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate ?? 0
-        let text = "astc4x4-v1|\(url.standardizedFileURL.path)|\(size)|\(modified)|\(isColor)|\(origin)|\(quality.reduction)"
+        let text = "astc4x4-v2|\(try contentHash(url))|\(isColor)|\(origin)|\(quality.reduction)"
         let digest = SHA256.hash(data: Data(text.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
         return url.deletingPathExtension().lastPathComponent + "-" + digest
     }
+
+    /// The SHA-256 of a file's bytes, remembered for as long as its path, size and modification date stay the same — so a
+    /// texture asked for again, as every prop sharing a sheet asks, is read once.
+    static func contentHash(_ url: URL) throws -> String {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let size = (attributes[.size] as? Int) ?? 0
+        let modified = (attributes[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate ?? 0
+        let stamp = "\(url.standardizedFileURL.path)|\(size)|\(modified)"
+        if let known = lock.withLock({ hashes[stamp] }) { return known }
+        let hash = SHA256.hash(data: try Data(contentsOf: url, options: .mappedIfSafe)).map { String(format: "%02x", $0) }.joined()
+        lock.withLock { hashes[stamp] = hash }
+        return hash
+    }
+
+    nonisolated(unsafe) private static var hashes: [String: String] = [:]
 
     // MARK: Encoding
 
