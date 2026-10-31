@@ -302,26 +302,72 @@ public nonisolated struct CollisionMesh: Sendable {
         return here
     }
 
-    /// How far along a ray the first triangle is, within `limit`, or nil.
+    /// How far along a ray the first triangle is, within `limit`, or nil. `direction` is unit length.
+    ///
+    /// **The cells the ray crosses, nearest first, and no further than the nearest hit** (2026-10-31). It used to ask
+    /// every cell in the square round the ray's middle — about a hundred for a third-person camera's 18 m line — and
+    /// test every triangle in them. At the back of a cave, whose walls and roof fill those cells, that one test a step
+    /// cost about 150 ms in an unoptimised build and the game ran at 7 frames a second. Walked in order, a cell is asked
+    /// only if the ray reaches it before anything already hit, and a triangle only if its height overlaps the ray's
+    /// in that cell.
+    ///
+    /// **Stopping at the first cell past the nearest hit is exact**: a hit lies in the cell the ray is in at that
+    /// distance, and a triangle is filed in every cell its plan touches, so no nearer hit is in a cell not yet asked.
     public func firstHit(from origin: SIMD3<Float>, direction: SIMD3<Float>, limit: Float) -> Float? {
-        let end = origin + direction * limit
-        let mid = (origin + end) / 2
-        let reach = simd_length(SIMD2(end.x - origin.x, end.z - origin.z)) / 2
+        guard limit > 0, !cellTriangles.isEmpty else { return nil }
+        let cell = Self.cellSize
+        // Where the ray starts, in cells, and which way it steps through them.
+        let gx = (origin.x - gridOrigin.x) / cell, gz = (origin.z - gridOrigin.y) / cell
+        var cx = Int(gx.rounded(.down)), cz = Int(gz.rounded(.down))
+        let stepX = direction.x > 0 ? 1 : -1, stepZ = direction.z > 0 ? 1 : -1
+        // How far along the ray one cell's width is, and how far to the first edge, on each axis. A ray that does not
+        // move along an axis never crosses its edges.
+        let acrossX = direction.x != 0 ? cell / abs(direction.x) : Float.infinity
+        let acrossZ = direction.z != 0 ? cell / abs(direction.z) : Float.infinity
+        var edgeX = direction.x != 0 ? (Float(cx + (stepX > 0 ? 1 : 0)) - gx) * cell / direction.x : Float.infinity
+        var edgeZ = direction.z != 0 ? (Float(cz + (stepZ > 0 ? 1 : 0)) - gz) * cell / direction.z : Float.infinity
+        // Heights compared with a little room, so a hit on a triangle's highest or lowest point is not lost to rounding.
+        let slack: Float = 1e-3
+
         var best: Float?
-        nearby(x: mid.x, z: mid.z, radius: reach) { t in
-            let a = corner(t, 0), b = corner(t, 1), c = corner(t, 2)
-            let e1 = b - a, e2 = c - a
-            let h = simd_cross(direction, e2)
-            let det = simd_dot(e1, h)
-            guard abs(det) > 1e-8 else { return }
-            let s = origin - a
-            let u = simd_dot(s, h) / det
-            guard u >= 0, u <= 1 else { return }
-            let q = simd_cross(s, e1)
-            let v = simd_dot(direction, q) / det
-            guard v >= 0, u + v <= 1 else { return }
-            let distance = simd_dot(e2, q) / det
-            if distance > 0, distance < (best ?? limit) { best = distance }
+        var enter: Float = 0
+        while enter <= limit, enter < (best ?? .infinity) {
+            let exit = Swift.min(edgeX, edgeZ, limit)
+            if cx >= 0, cz >= 0, cx < columns, cz < rows {
+                let yEnter = origin.y + direction.y * enter, yExit = origin.y + direction.y * exit
+                let low = Swift.min(yEnter, yExit) - slack, high = Swift.max(yEnter, yExit) + slack
+                let i = cz * columns + cx
+                var k = Int(cellStart[i])
+                let end = Int(cellStart[i + 1])
+                while k < end {
+                    let t = cellTriangles[k]
+                    k += 1
+                    let span = spans[Int(t)]
+                    guard span.y >= low, span.x <= high else { continue }
+                    let a = corner(t, 0), b = corner(t, 1), c = corner(t, 2)
+                    let e1 = b - a, e2 = c - a
+                    let h = simd_cross(direction, e2)
+                    let det = simd_dot(e1, h)
+                    guard abs(det) > 1e-8 else { continue }
+                    let s = origin - a
+                    let u = simd_dot(s, h) / det
+                    guard u >= 0, u <= 1 else { continue }
+                    let q = simd_cross(s, e1)
+                    let v = simd_dot(direction, q) / det
+                    guard v >= 0, u + v <= 1 else { continue }
+                    let distance = simd_dot(e2, q) / det
+                    if distance > 0, distance < (best ?? limit) { best = distance }
+                }
+            }
+            if edgeX < edgeZ {
+                cx += stepX
+                enter = edgeX
+                edgeX += acrossX
+            } else {
+                cz += stepZ
+                enter = edgeZ
+                edgeZ += acrossZ
+            }
         }
         return best
     }

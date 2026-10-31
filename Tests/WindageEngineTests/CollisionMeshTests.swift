@@ -60,4 +60,72 @@ struct CollisionMeshTests {
         #expect(abs(hit - 2.5) < 1e-3)
         #expect(world.firstHit(from: SIMD3(2, 0.75, 0), direction: SIMD3(-1, 0, 0), limit: 1) == nil)
     }
+
+    /// **The cell walk must give every triangle's answer.** It asks only the cells a ray crosses and stops past the
+    /// nearest hit, so a cell skipped wrongly or a stop made early shows as a hit missed or a farther one returned. A
+    /// thousand rays through a cluttered room — boxes of every size, slanted panels across many cells, some rays
+    /// starting outside the grid, some straight up or down or along one axis, every sign of direction — against every
+    /// triangle.
+    @Test("The cells a ray crosses give the same first hit as every triangle")
+    func rayWalkMatchesEveryTriangle() {
+        var seed: UInt64 = 0x5EED
+        func random(_ range: ClosedRange<Float>) -> Float {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return range.lowerBound + Float(seed >> 40) / Float(1 << 24) * (range.upperBound - range.lowerBound)
+        }
+        var triangles: [SIMD3<Float>] = []
+        for _ in 0..<60 {
+            triangles += CollisionMesh.box(centre: SIMD3(random(-20...20), random(0...6), random(-20...20)),
+                                           halfExtents: SIMD3(random(0.05...4), random(0.05...3), random(0.05...4)))
+        }
+        for _ in 0..<40 {
+            let a = SIMD3(random(-20...20), random(0...8), random(-20...20))
+            triangles += [a, a + SIMD3(random(-6...6), random(-3...3), random(-6...6)),
+                          a + SIMD3(random(-6...6), random(-3...3), random(-6...6))]
+        }
+        let mesh = CollisionMesh(triangles: triangles)
+
+        func everyTriangle(_ origin: SIMD3<Float>, _ direction: SIMD3<Float>, _ limit: Float) -> Float? {
+            var best: Float?
+            for t in 0..<(triangles.count / 3) {
+                let a = triangles[t * 3], b = triangles[t * 3 + 1], c = triangles[t * 3 + 2]
+                guard simd_length(simd_cross(b - a, c - a)) > 1e-8 else { continue }
+                let e1 = b - a, e2 = c - a
+                let h = simd_cross(direction, e2)
+                let det = simd_dot(e1, h)
+                guard abs(det) > 1e-8 else { continue }
+                let s = origin - a
+                let u = simd_dot(s, h) / det
+                guard u >= 0, u <= 1 else { continue }
+                let q = simd_cross(s, e1)
+                let v = simd_dot(direction, q) / det
+                guard v >= 0, u + v <= 1 else { continue }
+                let distance = simd_dot(e2, q) / det
+                if distance > 0, distance < (best ?? limit) { best = distance }
+            }
+            return best
+        }
+
+        var hits = 0
+        for ray in 0..<1000 {
+            let origin = SIMD3(random(-30...30), random(-2...10), random(-30...30))
+            var direction: SIMD3<Float>
+            switch ray % 10 {
+            case 0: direction = SIMD3(0, random(-1...1) < 0 ? -1 : 1, 0)   // straight up or down
+            case 1: direction = SIMD3(random(-1...1), 0, 0)                // along x only
+            case 2: direction = SIMD3(0, 0, random(-1...1))                // along z only
+            default: direction = SIMD3(random(-1...1), random(-1...1), random(-1...1))
+            }
+            guard simd_length(direction) > 1e-3 else { continue }
+            direction = simd_normalize(direction)
+            let limit = random(0.5...60)
+            let walked = mesh.firstHit(from: origin, direction: direction, limit: limit)
+            let expected = everyTriangle(origin, direction, limit)
+            if expected != nil { hits += 1 }
+            #expect((walked == nil) == (expected == nil),
+                    "ray \(ray): walked \(String(describing: walked)), every triangle \(String(describing: expected))")
+            if let walked, let expected { #expect(abs(walked - expected) < 1e-4, "ray \(ray): \(walked) against \(expected)") }
+        }
+        #expect(hits > 200, "the rays should hit something often enough to test the walk; \(hits) did")
+    }
 }
