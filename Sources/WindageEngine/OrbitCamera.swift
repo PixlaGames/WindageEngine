@@ -168,6 +168,26 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
     /// centre, which is where a third-person camera reads best. A game sets it from the character's height.
     public var shoulderHeight: Float = 1.7
 
+    /// **Over the shoulder**: how far to the camera's right the aim point sits, in meters. 0 — the default — centres the
+    /// character, as a game that only walks and looks wants. A shooter's third person sets it (The Division's framing):
+    /// the camera looks past the character's right shoulder, the character sits left of centre, and the middle of the
+    /// screen — where a shot goes — is clear of their back.
+    ///
+    /// **Moved sideways with the whole orbit, not added to the camera's position.** The view looks along the same line
+    /// it would centred, from a point beside the character, so turning stays a turn about that point and the
+    /// character's place on screen holds still as the camera swings.
+    ///
+    /// Kept clear like the distance: a wall at the character's right shoulder takes the offset in at once and lets it
+    /// out over ``Tuning/recoveryHalfLife`` (``shoulderClearance``), so the camera never looks out of the far side of
+    /// a wall the character has their shoulder against.
+    public var shoulderOffset: Float = 0
+
+    /// How far right the scenery lets the aim point sit, smoothed — the sideways ``clearance``.
+    public private(set) var shoulderClearance: Float = .greatestFiniteMagnitude
+
+    /// The sideways offset actually used: the smaller of what was asked for and what fits.
+    public var workingShoulderOffset: Float { min(shoulderOffset, shoulderClearance) }
+
     /// **45°**, vertical, in radians.
     ///
     /// Wide angles make a third-person subject small and distant and they exaggerate perspective, so a character near
@@ -195,7 +215,11 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
 
     // MARK: - Where it is
 
-    public var aimPoint: SIMD3<Float> { focus + SIMD3(0, shoulderHeight, 0) }
+    public var aimPoint: SIMD3<Float> { shoulder + groundRight * workingShoulderOffset }
+
+    /// The point over the character the orbit is about before the shoulder offset: ``focus`` raised by
+    /// ``shoulderHeight``. With no offset it is the ``aimPoint``.
+    public var shoulder: SIMD3<Float> { focus + SIMD3(0, shoulderHeight, 0) }
 
     /// Where the camera actually sits, derived rather than stored, so focus and angles are the only state that can
     /// disagree with each other.
@@ -254,6 +278,10 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
         // past the blended distance, so it is what the drawn camera shows.
         camera.clearance = start.workingDistance + (end.workingDistance - start.workingDistance) * t
         camera.shoulderHeight = start.shoulderHeight + (end.shoulderHeight - start.shoulderHeight) * t
+        camera.shoulderOffset = start.shoulderOffset + (end.shoulderOffset - start.shoulderOffset) * t
+        // As the distance: the offset seen is the nearer of asked and allowed, so that is what is blended.
+        camera.shoulderClearance = start.workingShoulderOffset
+            + (end.workingShoulderOffset - start.workingShoulderOffset) * t
         return camera
     }
 
@@ -360,6 +388,14 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
     /// **After ``follow(_:deltaTime:)``, not before.** The obstruction is a question about where the camera is going
     /// to be this frame, and the aim point does not settle until the follow has eased it.
     public mutating func keepClear(of surroundings: CharacterController.Surroundings, deltaTime: Float) {
+        // **Sideways first**: the aim point moves out to the shoulder, and the orbit's line is cast from wherever that
+        // leaves it. A wall at the right shoulder pulls the aim point back over the character.
+        if shoulderOffset > 0 {
+            let allowed = Self.allowedDistance(aimPoint: shoulder, direction: groundRight, desired: shoulderOffset,
+                                               in: surroundings, tuning: tuning, minimum: 0)
+            Self.ease(&shoulderClearance, toward: min(allowed, shoulderOffset), deltaTime: deltaTime,
+                      halfLife: tuning.recoveryHalfLife)
+        }
         constrain(to: Self.allowedDistance(aimPoint: aimPoint, direction: offsetDirection,
                                            desired: tuning.distanceRange.upperBound, in: surroundings, tuning: tuning),
                   deltaTime: deltaTime)
@@ -377,16 +413,20 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
         // *furthest* the camera could sit, and the view shows `min(distance, clearance)` — so easing toward that far
         // number spent the whole ease above the distance anybody could see, and the picture snapped back the moment
         // it crossed. In and out both read as jerks (found by playing).
-        let target = min(allowed, distance)
-        if target <= clearance {
-            clearance = target
+        Self.ease(&clearance, toward: min(allowed, distance), deltaTime: deltaTime, halfLife: tuning.recoveryHalfLife)
+    }
+
+    /// In at once, out over `halfLife` — ``constrain(to:deltaTime:)``'s rule, which the shoulder offset shares.
+    private static func ease(_ value: inout Float, toward target: Float, deltaTime: Float, halfLife: Float) {
+        if target <= value {
+            value = target
         } else {
-            clearance += (target - clearance) * (1 - exp2(-deltaTime / tuning.recoveryHalfLife))
+            value += (target - value) * (1 - exp2(-deltaTime / halfLife))
             // **A half-life never actually arrives**, and the last millimetre is invisible but not harmless: the
             // camera would sit fractionally short of the distance the player asked for, for ever, and anything
             // comparing the two would be wrong. Five millimetres at seven metres is nothing to look at and about two
             // seconds in.
-            if target - clearance < 0.005 { clearance = target }
+            if target - value < 0.005 { value = target }
         }
     }
 
@@ -411,9 +451,10 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
     ///   - aimPoint: What the camera looks at — the character's shoulder height, not their feet.
     ///   - direction: Unit vector from the aim point toward where the camera wants to sit.
     ///   - desired: The furthest the camera wants to be.
+    ///   - minimum: The nearest it may be pulled — ``Tuning/minimumDistance`` unless given; the shoulder offset's is 0.
     public static func allowedDistance(aimPoint: SIMD3<Float>, direction: SIMD3<Float>, desired: Float,
                                        in surroundings: CharacterController.Surroundings,
-                                       tuning: Tuning = Tuning()) -> Float {
+                                       tuning: Tuning = Tuning(), minimum: Float? = nil) -> Float {
         var allowed = desired
         let probeRadius = tuning.probeRadius
 
@@ -434,7 +475,7 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
                                     height: surroundings.groundHeight, clearance: tuning.groundClearance) {
             allowed = hit
         }
-        return max(allowed, tuning.minimumDistance)
+        return max(allowed, minimum ?? tuning.minimumDistance)
     }
 
     /// How far along the ray the camera first comes within `clearance` of the ground.
