@@ -217,13 +217,20 @@ public nonisolated struct CharacterController: Sendable {
         /// them.
         public var isBlocked: (@Sendable (SIMD2<Float>) -> Bool)?
 
+        /// **The edge of the world** — see ``WorldBoundary``. A body is kept inside it, after everything else that moves
+        /// it across, so nothing — a push, a carry, a wall it squeezed past — takes it out; and a body that falls below
+        /// its floor is put back on the last ground it stood on (``CharacterController/wasCaught``). A camera keeps
+        /// inside it too (``OrbitCamera/keepClear(of:deltaTime:)``). Nil, no edge and no net.
+        public var boundary: WorldBoundary?
+
         public init(groundHeight: @escaping @Sendable (Float, Float) -> Float = { _, _ in 0 },
                     solids: [Solid] = [], meshes: CollisionMesh? = nil,
-                    isBlocked: (@Sendable (SIMD2<Float>) -> Bool)? = nil) {
+                    isBlocked: (@Sendable (SIMD2<Float>) -> Bool)? = nil, boundary: WorldBoundary? = nil) {
             self.groundHeight = groundHeight
             self.solids = solids
             self.meshes = meshes
             self.isBlocked = isBlocked
+            self.boundary = boundary
         }
     }
 
@@ -480,6 +487,20 @@ public nonisolated struct CharacterController: Sendable {
     public private(set) var nextFoot: Foot = .left
     private var wasMoving = false
 
+    /// **Whether the boundary's net caught the body this step**: it fell below ``Surroundings/boundary``'s floor and is
+    /// back at ``safeFeet``, standing and still. A game answers it as it likes — a fade, a sound, a cost. Not an
+    /// ``Event``, whose set is decided; read every step, like ``pinnedBy``.
+    public private(set) var wasCaught = false
+
+    /// **The last ground the body stood on safely** — where the net puts it back. Taken once it has stood a moment
+    /// (``safeAfter``) inside the boundary, so a body that slips through a crack the instant it lands is not put back
+    /// on the crack. Where it was made or last teleported until then.
+    public private(set) var safeFeet: SIMD3<Float>
+    private var groundedFor: Float = 0
+
+    /// How long a body stands before where it stands counts as safe, seconds.
+    public static let safeAfter: Float = 0.25
+
     /// **The solids this step can reach**, by index, gathered once at the start of ``step(yaw:input:isJumpHeld:isCrouching:deltaTime:in:)``:
     /// every test the step makes — what is in the way, underfoot, overhead, pushing — looks at these and no others. A
     /// world of eight thousand boulders tested whole, several times a step, cost two milliseconds a step.
@@ -489,6 +510,7 @@ public nonisolated struct CharacterController: Sendable {
         self.tuning = tuning
         self.feet = feet
         self.eyeHeight = tuning.eyeHeight
+        safeFeet = feet
     }
 
     /// Puts the feet at `feet`, standing and still, **keeping the tuning** — a respawn, a level change,
@@ -610,6 +632,7 @@ public nonisolated struct CharacterController: Sendable {
                               in world: Surroundings) {
         let dt = max(deltaTime, 0)
         events.removeAll(keepingCapacity: true)
+        wasCaught = false
         near = nearbySolids(in: world, deltaTime: dt)
 
         // --- Carried by whatever is underfoot, if it moved. First, so everything after — walking,
@@ -763,8 +786,30 @@ public nonisolated struct CharacterController: Sendable {
         move(along: SIMD3(0, 0, travel.y), in: world)
         if let meshes = world.meshes { leaveMeshWalls(meshes, cameFrom: before) }
 
+        // --- The edge of the world, **last of everything that moves the body across**: a push or a carry before
+        // it could otherwise take the body through. Before the fall, so the body lands on whatever is under where it
+        // was kept, not where it was going.
+        if let boundary = world.boundary {
+            let height = body(at: feet, eyeHeight: eyeHeight).maximum.y - feet.y
+            let kept = boundary.contain(feet: feet, radius: tuning.radius, height: height)
+            if kept.y < feet.y { verticalVelocity = min(verticalVelocity, 0) }
+            feet = kept
+        }
+
         // --- Up and down.
         stepVertically(jumpHeld: isJumpHeld, deltaTime: dt, in: world)
+
+        // --- The net: below the floor, back on the last safe ground. Standing a moment inside makes ground safe.
+        if let boundary = world.boundary {
+            if boundary.isBelowFloor(feet) {
+                let back = safeFeet
+                self = CharacterController(feet: back, tuning: tuning)
+                wasCaught = true
+                return
+            }
+            groundedFor = isGrounded ? groundedFor + dt : 0
+            if groundedFor >= Self.safeAfter && boundary.contains(feet) { safeFeet = feet }
+        }
 
         // --- Footfalls, from the distance **actually covered**, not the distance asked for. Pushing
         // into a wall asks for six metres a second and covers none; counting what was asked for is

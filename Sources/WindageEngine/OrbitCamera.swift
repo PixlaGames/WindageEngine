@@ -440,7 +440,7 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
     /// The distance the camera may actually have, given what is in the way.
     ///
     /// Asks, in order: the meshes (``CollisionMesh/firstHit(from:direction:limit:)``), stopping ``Tuning/probeRadius``
-    /// short of the face they meet; each solid, grown by the probe radius; and the ground, staying
+    /// short of the face they meet; the ``CharacterController/Surroundings/boundary``, the same; each solid, grown by the probe radius; and the ground, staying
     /// ``Tuning/groundClearance`` above it. Never nearer than ``Tuning/minimumDistance``.
     ///
     /// **What the camera does not see**: ``CharacterController/Surroundings/isBlocked`` — a test of a point says
@@ -461,6 +461,13 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
         // **Meshes by their real shapes**, stopping the probe's radius short of the face they meet.
         if let meshes = surroundings.meshes,
            let hit = meshes.firstHit(from: aimPoint, direction: direction, limit: allowed + probeRadius) {
+            allowed = min(allowed, hit - probeRadius)
+        }
+
+        // **The edge of the world**, a probe's radius short of it: backed against the boundary, the camera stays in
+        // the world rather than looking at it from outside.
+        if let boundary = surroundings.boundary,
+           let hit = boundary.exit(from: aimPoint, direction: direction, limit: allowed + probeRadius) {
             allowed = min(allowed, hit - probeRadius)
         }
 
