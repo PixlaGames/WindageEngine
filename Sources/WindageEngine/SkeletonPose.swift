@@ -175,7 +175,14 @@ public nonisolated struct SkeletonPose: Sendable {
     ///
     /// **Joint-local, so a masked joint keeps its parent's motion**: a spine laid over a run still rides the run's hips.
     /// Build the mask with ``Skeleton/mask(from:weight:)``. One weight per joint, in the skeleton's order. Allocates nothing.
-    public mutating func overlay(_ layers: [(playhead: AnimationPlayhead, weight: Float)], mask: [Float]) {
+    ///
+    /// - Parameter modelRotationAt: **a joint that takes the layers' rotation in the character's own space** instead —
+    ///   the mask's first joint, typically. Riding the hips is right for a bob and wrong for an aim: a strafe turns the
+    ///   hips toward where the feet go, by twenty degrees in some, and an upper body riding them points the rifle twenty
+    ///   degrees off the crosshair. Held in model space, the spine turns as the layers' own hips and spine turned it,
+    ///   whatever the legs' hips are doing, and everything under it follows. Its position still rides the hips.
+    public mutating func overlay(_ layers: [(playhead: AnimationPlayhead, weight: Float)], mask: [Float],
+                                 modelRotationAt anchor: Int? = nil) {
         precondition(mask.count == skeleton.jointCount, "mask has \(mask.count) weights for \(skeleton.jointCount) joints")
         var total: Float = 0
         var heaviest = -1
@@ -186,7 +193,21 @@ public nonisolated struct SkeletonPose: Sendable {
         }
         guard total > 0 else { return }
         for joint in 0..<skeleton.jointCount where mask[joint] > 0 {
-            let mixed = mix(layers, joint: joint, total: total, heaviest: heaviest)
+            var mixed = mix(layers, joint: joint, total: total, heaviest: heaviest)
+            if joint == anchor, let parent = skeleton.parentIndices[joint] {
+                // The layers' own rotation of the anchor in model space, then made local to this pose's parent: the
+                // parents' rotations are the layers' mix above, and this pose's own chain below.
+                var theirs = mixed.rotation
+                var ours = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+                var ancestor: Int? = parent
+                while let a = ancestor {
+                    theirs = mix(layers, joint: a, total: total, heaviest: heaviest).rotation * theirs
+                    ours = localTransforms[a].rotation * ours
+                    ancestor = skeleton.parentIndices[a]
+                }
+                mixed = JointTransform(translation: mixed.translation, rotation: (ours.inverse * theirs).normalized,
+                                       scale: mixed.scale)
+            }
             localTransforms[joint] = localTransforms[joint].blended(toward: mixed, weight: min(mask[joint], 1))
         }
         refresh()

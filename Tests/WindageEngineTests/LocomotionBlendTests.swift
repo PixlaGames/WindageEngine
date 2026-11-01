@@ -101,3 +101,116 @@ struct LocomotionBlendTests {
         #expect(named.strides == ["A_Walk"])
     }
 }
+
+/// **Directions** (2026-10-31): a walk and a run that strafe and backpedal, a sprint that only goes forwards — the shape of a
+/// soldier pack's eight ways, with a backward clip whose feet land half a cycle from the forward one's.
+@Suite("Which way a character's stride goes")
+struct LocomotionDirectionTests {
+
+    private static func ways(_ name: String, back: Float) -> [LocomotionBlend.Direction] {
+        [.init("\(name)FL", heading: .pi / 4), .init("\(name)L", heading: .pi / 2), .init("\(name)BL", heading: 3 * .pi / 4),
+         .init("\(name)B", heading: .pi, phase: back), .init("\(name)BR", heading: -3 * .pi / 4),
+         .init("\(name)R", heading: -.pi / 2), .init("\(name)FR", heading: -.pi / 4)]
+    }
+    private let clips = LocomotionBlend.Clips(gaits: [
+        .init("Walk", 2, directions: ways("Walk", back: 0.45)),
+        .init("Run", 4, directions: ways("Run", back: 0.53)),
+        .init("Sprint", 7.24, phase: 0.78),
+    ])
+
+    private func blend(_ speed: Float, _ heading: Float) -> LocomotionBlend {
+        LocomotionBlend.choose(airborne: false, rising: false, groundSpeed: speed, heading: heading, clips: clips)
+    }
+    private func weight(_ b: LocomotionBlend, _ clip: String) -> Float { b.weights.first { $0.clip == clip }?.weight ?? 0 }
+
+    @Test("Straight ahead is the forward clip alone, at any speed")
+    func ahead() {
+        #expect(blend(2, 0).weights.map(\.clip) == ["Walk"])
+        #expect(blend(4.5, 0).weights.map(\.clip) == ["Run"])
+        #expect(blend(7, 0).weights.map(\.clip) == ["Sprint"])
+    }
+
+    @Test("Each of the eight ways is its own clip, whole")
+    func eightWays() {
+        let named: [(Float, String)] = [(.pi / 4, "RunFL"), (.pi / 2, "RunL"), (3 * .pi / 4, "RunBL"), (.pi, "RunB"),
+                                        (-.pi, "RunB"), (-3 * .pi / 4, "RunBR"), (-.pi / 2, "RunR"), (-.pi / 4, "RunFR"),
+                                        (2 * .pi + .pi / 2, "RunL")]
+        for (heading, clip) in named {
+            let b = blend(4, heading)
+            #expect(b.weights.count == 1 && weight(b, clip) == 1, "\(heading) gave \(b.weights.map(\.clip))")
+            #expect(b.strideReference == "Run", "the phase is the gait's, whichever way it goes")
+        }
+    }
+
+    @Test("Between two ways, the two neighbours, weighted by nearness, summing to one")
+    func between() {
+        let b = blend(4, .pi / 8 * 3)        // 67.5°: three quarters of the way from front-left to left
+        #expect(Set(b.weights.map(\.clip)) == ["RunFL", "RunL"])
+        #expect(abs(weight(b, "RunL") - 0.5) < 1e-4)
+        let c = blend(4, -.pi / 16)          // just right of ahead
+        #expect(abs(weight(c, "Run") - 0.75) < 1e-4 && abs(weight(c, "RunFR") - 0.25) < 1e-4)
+        // Across behind, where the headings wrap.
+        let d = blend(4, .pi + .pi / 8)
+        #expect(Set(d.weights.map(\.clip)) == ["RunB", "RunBR"])
+        for step in 0..<64 {
+            let e = blend(4, Float(step) / 64 * 2 * .pi - .pi)
+            #expect(e.weights.count <= 2 && abs(e.weights.reduce(0) { $0 + $1.weight } - 1) < 1e-4)
+        }
+    }
+
+    @Test("Turning the heading round, the weights move smoothly — no clip jumps in or out")
+    func smooth() {
+        var last = blend(4, 0)
+        for step in 1...720 {
+            let next = blend(4, Float(step) / 720 * 2 * .pi)
+            for clip in clips.strides {
+                #expect(abs(weight(next, clip) - weight(last, clip)) < 0.02, "\(clip) jumped at step \(step)")
+            }
+            last = next
+        }
+    }
+
+    /// **The sprint has no backpedal**: played backing away it would moonwalk at speed.
+    @Test("Off ahead, a gait with no directions gives way to one that has them")
+    func sprintGivesWay() {
+        #expect(blend(7, .pi / 8).strideReference == "Sprint", "a little off ahead, the sprint still")
+        let back = blend(7, .pi)
+        #expect(back.weights.map(\.clip) == ["RunB"])
+        #expect(abs(back.pace - 7 / 4) < 1e-4, "the run stretched to cover it")
+        #expect(blend(7, .pi / 2).weights.map(\.clip) == ["RunL"])
+    }
+
+    @Test("A game with no directions plays its gaits whatever the heading")
+    func undirected() {
+        let plain = LocomotionBlend.Clips(gaits: [.init("Walk", 1.45), .init("Run", 2.59)])
+        let b = LocomotionBlend.choose(airborne: false, rising: false, groundSpeed: 2.5, heading: .pi, clips: plain)
+        #expect(b.weights.map(\.clip) == ["Run"])
+    }
+
+    @Test("Every direction is a stride, and each is sampled at its gait's and its own offset")
+    func offsets() {
+        #expect(clips.strides.count == 17)
+        #expect(clips.phaseOffset(of: "Walk") == 0)
+        #expect(clips.phaseOffset(of: "WalkL") == 0)
+        #expect(clips.phaseOffset(of: "WalkB") == 0.45)
+        #expect(clips.phaseOffset(of: "RunB") == 0.53)
+        #expect(clips.phaseOffset(of: "Sprint") == 0.78)
+        #expect(clips.phaseOffset(of: "Idle") == 0)
+    }
+
+    @Test("The stride clock runs at the pace over the cycle, holds when still, and wraps")
+    func clock() {
+        var clock = StrideClock()
+        clock.advance(by: 0.2, pace: 1, cycle: 0.8)
+        #expect(abs(clock.phase - 0.25) < 1e-5)
+        clock.advance(by: 1, pace: 0, cycle: 0.8)
+        #expect(abs(clock.phase - 0.25) < 1e-5, "standing still holds the stride where it stopped")
+        clock.advance(by: 0.6, pace: 2, cycle: 0.6)
+        #expect(abs(clock.phase - 0.25) < 1e-4, "two whole cycles later, the same moment")
+        // Each clip at its own offset, in its own seconds: the backward walk half a cycle on, the run in its 0.6 s.
+        #expect(abs(clock.time(of: "WalkB", duration: 0.8, in: clips) - 0.7 * 0.8) < 1e-4)
+        #expect(abs(clock.time(of: "Sprint", duration: 0.6, in: clips) - 0.03 * 0.6) < 1e-4)
+        #expect(abs(StrideClock(phase: -0.25).phase - 0.75) < 1e-6)
+    }
+}
+

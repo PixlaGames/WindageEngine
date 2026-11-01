@@ -288,4 +288,31 @@ struct SkeletonOverlayTests {
         pose.overlay([(aim, 0)], mask: skeleton.mask(from: 1))
         #expect(abs(pose.localTransforms[1].rotation.angle - 0.8) < 1e-3, "no weight changes nothing")
     }
+
+    /// **An aim held in model space**: a walk whose hips turn with the stride — a strafe's do — under an upper body that
+    /// must point where the aim clip points, not where the hips do.
+    @Test("Held in model space, the anchor turns as the clip turned it, whatever the hips do")
+    func modelSpaceAnchor() throws {
+        let skeleton = try rig()
+        let all = ["root", "root/spine", "root/spine/arm", "root/leg"]
+        let strafe = AnimationPlayhead(clip: try held(0.35, joints: all), skeleton: skeleton)   // hips turned 0.35
+        let aim = AnimationPlayhead(clip: try held(0.1, joints: all), skeleton: skeleton)       // its own hips at 0.1
+        var pose = SkeletonPose(skeleton: skeleton)
+        pose.set(mixing: [(strafe, 1)])
+        pose.overlay([(aim, 1)], mask: skeleton.mask(from: 1), modelRotationAt: 1)
+        func yaw(_ joint: Int) -> Float { let m = pose.modelTransform(ofJoint: joint); return atan2(m.columns.0.y, m.columns.0.x) }
+        #expect(abs(yaw(0) - 0.35) < 1e-4, "the hips keep the strafe")
+        #expect(abs(yaw(1) - 0.2) < 1e-4, "the spine where the aim put it — its hips 0.1 and itself 0.1 — not 0.45: \(yaw(1))")
+        #expect(abs(yaw(2) - 0.3) < 1e-4, "and the arm rides the spine")
+        #expect(abs(yaw(3) - 0.7) < 1e-4, "the leg keeps the strafe's own")
+        // Without the anchor, the spine rides the hips: 0.35 + 0.1.
+        pose.set(mixing: [(strafe, 1)])
+        pose.overlay([(aim, 1)], mask: skeleton.mask(from: 1))
+        #expect(abs(yaw(1) - 0.45) < 1e-4)
+        // Half a mask: half way between the gait's spine and the aim's, in the spine's own space.
+        pose.set(mixing: [(strafe, 1)])
+        pose.overlay([(aim, 1)], mask: skeleton.mask(from: 1, weight: 0.5), modelRotationAt: 1)
+        #expect(abs(yaw(1) - (0.35 + (0.35 + (-0.15 - 0.35) * 0.5))) < 1e-3, "\(yaw(1))")
+    }
 }
+
