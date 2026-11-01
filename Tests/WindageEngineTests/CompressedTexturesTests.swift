@@ -231,4 +231,31 @@ struct CompressedTexturesTests {
         #expect(try store.texture(.url(url), isColor: true) === made)
         #expect(try store.texture(.url(url), isColor: false) !== made, "read as data, it is another texture")
     }
+
+    /// A new version's first file clears what older versions left — loose files from before the version folders, and an
+    /// older version's folder — and touches nothing else in the folder (2026-11-01).
+    @Test func makingAFileRemovesOlderVersionsAndNothingElse() throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let cache = folder.appending(path: "cache")
+        let manager = FileManager.default
+        try manager.createDirectory(at: cache.appending(path: "astc4x4-v2"), withIntermediateDirectories: true)
+        try Data([1]).write(to: cache.appending(path: "astc4x4-v2/old-0123.ktx"))
+        try Data([1]).write(to: cache.appending(path: "Loose-4567.ktx"))
+        try Data([1]).write(to: cache.appending(path: "notes.txt"))
+        let made = try CompressedTextures.prepare(try picture(64, 64, top: red, bottom: blue), isColor: true, in: cache)
+        #expect(made.deletingLastPathComponent().lastPathComponent == CompressedTextures.version)
+        let left = Set(try manager.contentsOfDirectory(atPath: cache.path))
+        #expect(left == [CompressedTextures.version, "notes.txt"], "\(left)")
+        #expect(CompressedTextures.cached(made, isColor: true, in: cache) == nil, "a .ktx is not an image it compresses")
+    }
+
+    /// Sandboxed, an app's cache is its container's own; not sandboxed, it is in a folder named after the app — never
+    /// loose in the user's Caches folder.
+    @Test func anAppsCacheIsNamedForItOutsideTheSandbox() throws {
+        let inside = try #require(CompressedTextures.appCache(named: "Compressed Textures", owner: "com.example.Game", sandboxed: true))
+        let outside = try #require(CompressedTextures.appCache(named: "Compressed Textures", owner: "com.example.Game", sandboxed: false))
+        #expect(inside.lastPathComponent == "Compressed Textures")
+        #expect(outside.deletingLastPathComponent().lastPathComponent == "com.example.Game")
+        #expect(outside.deletingLastPathComponent().deletingLastPathComponent() == inside.deletingLastPathComponent())
+    }
 }

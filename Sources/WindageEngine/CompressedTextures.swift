@@ -27,6 +27,13 @@ import Metal
 /// writes uncompressed pixels and ignores the request. So each mip level is made here, encoded on its own, and the levels
 /// are written together as a **KTX 1.1** file, a format other tools read too.
 ///
+/// **One version's files at a time** (2026-11-01). Files are kept in a folder named after the cache's ``version``, inside
+/// the folder a caller gives; the first file made in a folder in a run removes what older versions left there, so a
+/// change of encoding never leaves the last one's files behind. Before this, every change of version left a full copy of
+/// every texture that nothing would read again.
+///
+/// **Where an app keeps it**: ``appCache(named:bundle:)``.
+///
 /// **Safe from any thread**: a loader warms the cache in the background (``prepare(_:isColor:origin:quality:in:)``), and
 /// ``TextureStore`` then reads the file on the main actor. Two threads asking for the same texture encode it once.
 public nonisolated enum CompressedTextures {
@@ -45,6 +52,24 @@ public nonisolated enum CompressedTextures {
         }
     }
 
+    /// The version of the cache's files, and the name of the folder they are kept in. A change of encoding changes it,
+    /// and the files of every other version are removed from a folder the next time something is made in it.
+    public static let version = "astc4x4-v3"
+
+    /// **The folder an app keeps its compressed textures in.** Sandboxed, `Caches/<name>` in the app's container, which
+    /// is the app's alone. Not sandboxed, `~/Library/Caches/<bundle identifier>/<name>` — Apple's convention, so the
+    /// folder says whose it is: a cache made by a copy of an app run outside its sandbox, or by an app that ships
+    /// without one, never lands loose in the user's Caches folder where nothing reads it and nothing names its owner.
+    public static func appCache(named name: String = "Compressed Textures", bundle: Bundle = .main) -> URL? {
+        appCache(named: name, owner: bundle.bundleIdentifier ?? ProcessInfo.processInfo.processName,
+                 sandboxed: ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil)
+    }
+
+    static func appCache(named name: String, owner: String, sandboxed: Bool) -> URL? {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
+        return sandboxed ? caches.appending(path: name) : caches.appending(path: owner).appending(path: name)
+    }
+
     /// The images this compresses: what ImageIO reads that a pack's materials name.
     public static let compressible: Set<String> = ["png", "jpg", "jpeg", "tga", "tif", "tiff", "bmp", "gif", "heic"]
 
@@ -52,7 +77,8 @@ public nonisolated enum CompressedTextures {
     @discardableResult
     public static func prepare(_ url: URL, isColor: Bool, origin: TextureOrigin = .bottomLeft,
                                quality: GraphicsSettings.TextureQuality = .full, in cache: URL) throws -> URL {
-        let file = try cache.appending(path: key(url, isColor: isColor, origin: origin, quality: quality) + ".ktx")
+        let folder = cache.appending(path: version)
+        let file = try folder.appending(path: key(url, isColor: isColor, origin: origin, quality: quality) + ".ktx")
         while true {
             if FileManager.default.fileExists(atPath: file.path) { return file }
             if claim(file.path) { break }
@@ -61,8 +87,9 @@ public nonisolated enum CompressedTextures {
         defer { release(file.path) }
         if FileManager.default.fileExists(atPath: file.path) { return file }
         let data = try encode(url, isColor: isColor, origin: origin, quality: quality)
-        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try data.write(to: file, options: .atomic)
+        removeOtherVersions(in: cache)
         return file
     }
 
@@ -72,13 +99,13 @@ public nonisolated enum CompressedTextures {
     public static func cached(_ url: URL, isColor: Bool, origin: TextureOrigin = .bottomLeft,
                               quality: GraphicsSettings.TextureQuality = .full, in cache: URL) -> URL? {
         guard let name = try? key(url, isColor: isColor, origin: origin, quality: quality) else { return nil }
-        let file = cache.appending(path: name + ".ktx")
+        let file = cache.appending(path: version).appending(path: name + ".ktx")
         return FileManager.default.fileExists(atPath: file.path) ? file : nil
     }
 
     /// The cache's name for a texture: its file's contents, and how it is read. A version in it retires old files.
     static func key(_ url: URL, isColor: Bool, origin: TextureOrigin, quality: GraphicsSettings.TextureQuality) throws -> String {
-        let text = "astc4x4-v3|\(try contentHash(url))|\(isColor)|\(origin)|\(quality.reduction)"
+        let text = "\(version)|\(try contentHash(url))|\(isColor)|\(origin)|\(quality.reduction)"
         let digest = SHA256.hash(data: Data(text.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
         return url.deletingPathExtension().lastPathComponent + "-" + digest
     }
@@ -318,4 +345,23 @@ public nonisolated enum CompressedTextures {
 
     private static func claim(_ path: String) -> Bool { lock.withLock { making.insert(path).inserted } }
     private static func release(_ path: String) { _ = lock.withLock { making.remove(path) } }
+
+    // MARK: Older versions
+
+    nonisolated(unsafe) private static var tidied: Set<String> = []
+
+    /// **Removes what older versions left in a cache folder**, once a run: the `.ktx` files kept loose in it before files
+    /// went into a folder per version, and every `astc4x4-` folder but this version's. Nothing else in it is touched.
+    /// Called after a file is made, so a folder only read — a game's bundle — is never written to.
+    static func removeOtherVersions(in cache: URL) {
+        guard lock.withLock({ tidied.insert(cache.standardizedFileURL.path).inserted }) else { return }
+        let manager = FileManager.default
+        guard let entries = try? manager.contentsOfDirectory(at: cache, includingPropertiesForKeys: nil) else { return }
+        for entry in entries {
+            let name = entry.lastPathComponent
+            let older = name == version ? false
+                : entry.pathExtension.lowercased() == "ktx" || name.hasPrefix("astc4x4-")
+            if older { try? manager.removeItem(at: entry) }
+        }
+    }
 }
