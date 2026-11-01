@@ -78,7 +78,7 @@ public nonisolated enum CompressedTextures {
 
     /// The cache's name for a texture: its file's contents, and how it is read. A version in it retires old files.
     static func key(_ url: URL, isColor: Bool, origin: TextureOrigin, quality: GraphicsSettings.TextureQuality) throws -> String {
-        let text = "astc4x4-v2|\(try contentHash(url))|\(isColor)|\(origin)|\(quality.reduction)"
+        let text = "astc4x4-v3|\(try contentHash(url))|\(isColor)|\(origin)|\(quality.reduction)"
         let digest = SHA256.hash(data: Data(text.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
         return url.deletingPathExtension().lastPathComponent + "-" + digest
     }
@@ -126,20 +126,42 @@ public nonisolated enum CompressedTextures {
         // Each level drawn from the one before, halving: what the GPU's own mip generation does, but filtered in the
         // image's sRGB rather than in linear light — invisible on an atlas of flat colours, slightly darker on fine
         // high-contrast detail far off.
-        var levels: [(width: Int, height: Int, blocks: Data)] = []
-        while true {
-            guard let blocks = astc(level) else { throw CompressionError.encodingFailed(name) }
-            levels.append((level.width, level.height, blocks))
-            if level.width == 1 && level.height == 1 { break }
-            guard let next = draw(level, width: max(level.width / 2, 1), height: max(level.height / 2, 1), flipped: false)
+        var drawn = [level]
+        while level.width > 1 || level.height > 1 {
+            guard let next = draw(level.image, width: max(level.width / 2, 1), height: max(level.height / 2, 1), flipped: false)
             else { throw CompressionError.encodingFailed(name) }
+            drawn.append(next)
             level = next
+        }
+        // **Each level un-premultiplied before it is encoded** (2026-11-01). Core Graphics draws and filters with colour
+        // multiplied by alpha, which is right for filtering; but ASTC stores colour as it is, and ImageIO hands it the
+        // multiplied values. A leaf sheet's mips then held leaf colour times coverage: right up close, and darker each
+        // level down, until far trees drew nearly black. A texel no coverage reached takes the colour of the level below
+        // it, so a cut-out's edge filters toward its own colour rather than toward black.
+        var straight = [[UInt8]](repeating: [], count: drawn.count)
+        for index in drawn.indices.reversed() {
+            straight[index] = unpremultiplied(drawn[index], below: index + 1 < drawn.count
+                                              ? (straight[index + 1], drawn[index + 1].width, drawn[index + 1].height) : nil)
+        }
+        var levels: [(width: Int, height: Int, blocks: Data)] = []
+        for (index, level) in drawn.enumerated() {
+            guard let image = straightImage(straight[index], width: level.width, height: level.height),
+                  let blocks = astc(image) else { throw CompressionError.encodingFailed(name) }
+            levels.append((level.width, level.height, blocks))
         }
         return ktx(levels, isColor: isColor)
     }
 
+    /// A level as Core Graphics drew it: the image, and its pixels — RGBA, colour multiplied by alpha.
+    private struct Drawn {
+        let image: CGImage
+        let pixels: [UInt8]
+        var width: Int { image.width }
+        var height: Int { image.height }
+    }
+
     /// The image drawn into plain RGBA at a size — `flipped` puts its bottom row first.
-    private static func draw(_ image: CGImage, width: Int, height: Int, flipped: Bool) -> CGImage? {
+    private static func draw(_ image: CGImage, width: Int, height: Int, flipped: Bool) -> Drawn? {
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
                                       space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
@@ -150,7 +172,45 @@ public nonisolated enum CompressedTextures {
             context.scaleBy(x: 1, y: -1)
         }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return context.makeImage()
+        guard let made = context.makeImage(), let data = context.data else { return nil }
+        return Drawn(image: made, pixels: [UInt8](UnsafeBufferPointer(start: data.assumingMemoryBound(to: UInt8.self),
+                                                                      count: width * height * 4)))
+    }
+
+    /// A level's pixels with colour divided back out by alpha; a texel with no alpha takes the colour of the texel under
+    /// it in the next level down (`below`, already un-premultiplied), or black on the last.
+    private static func unpremultiplied(_ level: Drawn, below: (pixels: [UInt8], width: Int, height: Int)?) -> [UInt8] {
+        let width = level.width, height = level.height
+        var out = level.pixels
+        out.withUnsafeMutableBufferPointer { p in
+            for y in 0..<height {
+                for x in 0..<width {
+                    let i = (y * width + x) * 4
+                    let a = Int(p[i + 3])
+                    if a == 255 { continue }
+                    if a == 0 {
+                        guard let below else { continue }
+                        let bx = min(x * below.width / width, below.width - 1)
+                        let by = min(y * below.height / height, below.height - 1)
+                        let j = (by * below.width + bx) * 4
+                        p[i] = below.pixels[j]; p[i + 1] = below.pixels[j + 1]; p[i + 2] = below.pixels[j + 2]
+                        continue
+                    }
+                    for c in 0..<3 { p[i + c] = UInt8(min(255, (Int(p[i + c]) * 255 + a / 2) / a)) }
+                }
+            }
+        }
+        return out
+    }
+
+    /// Un-premultiplied RGBA as an image ImageIO encodes as it is.
+    private static func straightImage(_ pixels: [UInt8], width: Int, height: Int) -> CGImage? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+                       space: space, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue
+                                                                 | CGBitmapInfo.byteOrder32Big.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
     /// One image's ASTC 4×4 blocks, by ImageIO — the `.astc` file's 16-byte header taken off.

@@ -3,6 +3,7 @@ import Foundation
 import ImageIO
 import Metal
 import Testing
+import simd
 @testable import WindageEngine
 
 /// ASTC 4×4 copies of textures, made once and kept (``CompressedTextures``) — 2026-10-28.
@@ -68,6 +69,68 @@ struct CompressedTexturesTests {
         #expect(texture.mipmapLevelCount == 10, "512 × 256 down to 1 × 1")
         let data = try CompressedTextures.prepare(url, isColor: false, origin: .bottomLeft, in: cache)
         #expect(try CompressedTextures.texture(fromKTX: data, device: device, queue: queue).pixelFormat == .astc_4x4_ldr)
+    }
+
+    /// **A cut-out's mips keep its colour** (2026-11-01): a leaf sheet, opaque green columns between empty ones, halves to
+    /// green at half coverage — never green times a half, which drew far trees nearly black.
+    @Test func aCutOutsMipsKeepTheirColour() throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let context = try #require(CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(srgbRed: 0.25, green: 0.6, blue: 0.1, alpha: 1))
+        for x in stride(from: 0, to: 64, by: 2) { context.fill(CGRect(x: x, y: 0, width: 1, height: 64)) }
+        let url = folder.appending(path: "leaves.png")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let destination = try #require(CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try #require(context.makeImage()), nil)
+        #expect(CGImageDestinationFinalize(destination))
+
+        let file = try CompressedTextures.prepare(url, isColor: true, in: folder.appending(path: "cache"))
+        guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return }
+        let texture = try CompressedTextures.texture(fromKTX: file, device: device, queue: queue)
+        // Every level below the first, as the GPU reads it: green at half coverage, not green times a half.
+        for level in 1..<4 {
+            let (colour, alpha) = try average(texture, level: level, device: device, queue: queue)
+            #expect(simd_distance(colour, SIMD3(0.25, 0.6, 0.1)) < 0.05, "level \(level): \(colour)")
+            #expect(abs(alpha - 0.5) < 0.05, "level \(level): coverage \(alpha)")
+        }
+    }
+
+    /// A level's average colour (sRGB, as stored) and alpha, read by a compute kernel — ASTC cannot be blitted out.
+    private func average(_ texture: MTLTexture, level: Int, device: MTLDevice,
+                         queue: MTLCommandQueue) throws -> (SIMD3<Float>, Float) {
+        let source = """
+        #include <metal_stdlib>
+        using namespace metal;
+        kernel void readLevel(texture2d<float> t [[texture(0)]], device float4 *out [[buffer(0)]],
+                              constant uint &level [[buffer(1)]], uint2 id [[thread_position_in_grid]]) {
+            uint w = t.get_width(level);
+            if (id.x >= w || id.y >= t.get_height(level)) return;
+            out[id.y * w + id.x] = t.read(id, level);
+        }
+        """
+        let library = try device.makeLibrary(source: source, options: nil)
+        let pipeline = try device.makeComputePipelineState(function: try #require(library.makeFunction(name: "readLevel")))
+        let width = max(texture.width >> level, 1), height = max(texture.height >> level, 1)
+        let out = try #require(device.makeBuffer(length: width * height * 16, options: .storageModeShared))
+        var index = UInt32(level)
+        let commands = try #require(queue.makeCommandBuffer())
+        let encoder = try #require(commands.makeComputeCommandEncoder())
+        encoder.setComputePipelineState(pipeline)
+        encoder.setTexture(texture, index: 0)
+        encoder.setBuffer(out, offset: 0, index: 0)
+        encoder.setBytes(&index, length: 4, index: 1)
+        encoder.dispatchThreads(MTLSize(width: width, height: height, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
+        encoder.endEncoding()
+        commands.commit()
+        commands.waitUntilCompleted()
+        let texels = UnsafeBufferPointer(start: out.contents().assumingMemoryBound(to: SIMD4<Float>.self), count: width * height)
+        // The texture is sRGB, so the read is linear: back to sRGB to compare with the colour as painted.
+        func encoded(_ v: Float) -> Float { v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1 / 2.4) - 0.055 }
+        let sum = texels.reduce(SIMD4<Float>.zero, +) / Float(texels.count)
+        return (SIMD3(encoded(sum.x), encoded(sum.y), encoded(sum.z)), sum.w)
     }
 
     @Test func aCachedTextureIsMadeOnceAndAChangedFileAgain() throws {
