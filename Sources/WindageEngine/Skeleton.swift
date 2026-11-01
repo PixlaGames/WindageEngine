@@ -149,4 +149,17 @@ public nonisolated struct Skeleton: Sendable {
     public func index(ofJoint path: String) -> Int? {
         jointPaths.firstIndex(of: path)
     }
+
+    /// **A joint and everything under it**, as a mask for ``SkeletonPose/overlay(_:mask:)``: `weight` on those joints, 0 on
+    /// the rest — the spine's first joint gives an upper body; a shoulder, one arm. Relies on the parent-first order every
+    /// skeleton keeps.
+    public func mask(from joint: Int, weight: Float = 1) -> [Float] {
+        var mask = [Float](repeating: 0, count: jointCount)
+        guard (0..<jointCount).contains(joint) else { return mask }
+        mask[joint] = weight
+        for j in (joint + 1)..<max(jointCount, joint + 1) where parentIndices[j].map({ mask[$0] > 0 }) ?? false {
+            mask[j] = weight
+        }
+        return mask
+    }
 }

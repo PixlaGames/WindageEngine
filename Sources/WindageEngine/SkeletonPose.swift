@@ -163,35 +163,64 @@ public nonisolated struct SkeletonPose: Sendable {
         }
 
         for joint in 0..<skeleton.jointCount {
-            let rest = JointTransform(matrix: skeleton.restTransforms[joint])
-            var translation = SIMD3<Float>.zero
-            var scale = SIMD3<Float>.zero
-            var rotation = SIMD4<Float>.zero
-            var reference: SIMD4<Float>?
-            var heaviestRotation = rest.rotation
-            for (index, layer) in layers.enumerated() where layer.weight > 0 {
-                let sampled = layer.playhead.binding.clipJointIndices[joint].map {
-                    layer.playhead.clip.sample(joint: $0, at: layer.playhead.sampleTime, rest: rest)
-                } ?? rest
-                let w = layer.weight / total
-                translation += sampled.translation * w
-                scale += sampled.scale * w
-                var q = sampled.rotation.vector
-                if let reference {
-                    if simd_dot(q, reference) < 0 { q = -q }
-                } else {
-                    reference = q
-                }
-                rotation += q * w
-                if index == heaviest { heaviestRotation = sampled.rotation }
-            }
-            let length = simd_length(rotation)
-            localTransforms[joint] = JointTransform(
-                translation: translation,
-                rotation: length > 1e-4 ? simd_quatf(vector: rotation / length) : heaviestRotation,
-                scale: scale)
+            localTransforms[joint] = mix(layers, joint: joint, total: total, heaviest: heaviest)
         }
         refresh()
+    }
+
+    /// **Lays clips over part of the rig** — an upper body aiming a rifle while the legs keep walking. Each joint's pose
+    /// so far (whatever the last `set` made it) is moved toward the layers' mix by `mask[joint]`: 0 keeps it, 1 replaces it,
+    /// between blends. The layers mix as in ``set(mixing:)``: weights relative, hemispheres matched, a cancelled sum taking
+    /// the heaviest layer's rotation. With no weight among them, nothing changes.
+    ///
+    /// **Joint-local, so a masked joint keeps its parent's motion**: a spine laid over a run still rides the run's hips.
+    /// Build the mask with ``Skeleton/mask(from:weight:)``. One weight per joint, in the skeleton's order. Allocates nothing.
+    public mutating func overlay(_ layers: [(playhead: AnimationPlayhead, weight: Float)], mask: [Float]) {
+        precondition(mask.count == skeleton.jointCount, "mask has \(mask.count) weights for \(skeleton.jointCount) joints")
+        var total: Float = 0
+        var heaviest = -1
+        for (index, layer) in layers.enumerated() where layer.weight > 0 {
+            checkBinding(of: layer.playhead, role: "overlaid playhead")
+            total += layer.weight
+            if heaviest < 0 || layer.weight > layers[heaviest].weight { heaviest = index }
+        }
+        guard total > 0 else { return }
+        for joint in 0..<skeleton.jointCount where mask[joint] > 0 {
+            let mixed = mix(layers, joint: joint, total: total, heaviest: heaviest)
+            localTransforms[joint] = localTransforms[joint].blended(toward: mixed, weight: min(mask[joint], 1))
+        }
+        refresh()
+    }
+
+    /// One joint's mix of the layers, as ``set(mixing:)`` and ``overlay(_:mask:)`` make it.
+    private func mix(_ layers: [(playhead: AnimationPlayhead, weight: Float)], joint: Int, total: Float,
+                     heaviest: Int) -> JointTransform {
+        let rest = JointTransform(matrix: skeleton.restTransforms[joint])
+        var translation = SIMD3<Float>.zero
+        var scale = SIMD3<Float>.zero
+        var rotation = SIMD4<Float>.zero
+        var reference: SIMD4<Float>?
+        var heaviestRotation = rest.rotation
+        for (index, layer) in layers.enumerated() where layer.weight > 0 {
+            let sampled = layer.playhead.binding.clipJointIndices[joint].map {
+                layer.playhead.clip.sample(joint: $0, at: layer.playhead.sampleTime, rest: rest)
+            } ?? rest
+            let w = layer.weight / total
+            translation += sampled.translation * w
+            scale += sampled.scale * w
+            var q = sampled.rotation.vector
+            if let reference {
+                if simd_dot(q, reference) < 0 { q = -q }
+            } else {
+                reference = q
+            }
+            rotation += q * w
+            if index == heaviest { heaviestRotation = sampled.rotation }
+        }
+        let length = simd_length(rotation)
+        return JointTransform(translation: translation,
+                              rotation: length > 1e-4 ? simd_quatf(vector: rotation / length) : heaviestRotation,
+                              scale: scale)
     }
 
     /// Poses the rig directly, for anything that is not a clip — a procedural head turn, a ragdoll,

@@ -221,11 +221,28 @@ public nonisolated struct CollisionMesh: Sendable {
     /// that. **Not all five samples**: requiring every one dropped a body through the edge of a mound, or the seam
     /// between two, to stand inside the rock. A rail fails it still: along its length both sides hit, across it
     /// neither does.
+    ///
+    /// **A gap narrower than two footings is bridged** (2026-10-31): with no floor at the centre but one a footing
+    /// away on *both* sides along an axis, the higher of those two is the floor. A staircase's treads that stop 3 cm
+    /// short of each other dropped a body walking up through the crack to the ground under the stairs, from where it
+    /// walked on underneath them. An edge is not bridged — floor on one side only — so a body still steps off one.
     public func standingFloor(x: Float, z: Float, below limit: Float) -> Float? {
-        guard let centre = floor(x: x, z: z, below: limit) else { return nil }
+        guard let centre = floor(x: x, z: z, below: limit) else { return bridgedFloor(x: x, z: z, below: limit) }
         func hit(_ dx: Float, _ dz: Float) -> Bool { floor(x: x + dx, z: z + dz, below: limit) != nil }
         guard hit(Self.footing, 0) || hit(-Self.footing, 0), hit(0, Self.footing) || hit(0, -Self.footing) else { return nil }
         return centre
+    }
+
+    /// The higher of the floors a footing either side of a point, along whichever axis has floor on both sides — nil
+    /// where neither does.
+    private func bridgedFloor(x: Float, z: Float, below limit: Float) -> Float? {
+        let f = Self.footing
+        var best: Float?
+        if let a = floor(x: x + f, z: z, below: limit), let b = floor(x: x - f, z: z, below: limit) { best = Swift.max(a, b) }
+        if let a = floor(x: x, z: z + f, below: limit), let b = floor(x: x, z: z - f, below: limit) {
+            best = Swift.max(best ?? -.greatestFiniteMagnitude, Swift.max(a, b))
+        }
+        return best
     }
 
     /// **The lowest surface over a point between `low` and `high`**, of any steepness — the roof of a cave, the

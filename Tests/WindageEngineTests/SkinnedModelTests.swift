@@ -93,6 +93,16 @@ struct SkinnedModelTests {
                                      semantics: Self.semantics)
         #expect(model.rig.clips.map(\.name).sorted() == ["Lower", "Raise"])
         #expect(model.mesh.submeshes.count == 2)
+        // **The triangles bound to part of the rig**: the arm (joint 1) is all the Plate's, and half the band's corners
+        // are half on it — in at a half, out above.
+        let armMask = model.rig.skeleton.mask(from: 1)
+        let bound = model.triangles(boundTo: armMask)
+        let plate = try #require(model.materials.firstIndex { $0.name == "Plate" })
+        #expect(bound[plate].count == 6, "the whole arm")
+        #expect(bound.reduce(0) { $0 + $1.count } > 6, "the half-and-half band comes with it at a half")
+        #expect(model.triangles(boundTo: armMask, least: 0.75).reduce(0) { $0 + $1.count } == 6, "and not above")
+        #expect(model.triangles(boundTo: model.rig.skeleton.mask(from: 0)).reduce(0) { $0 + $1.count } == 18,
+                "the root's mask is everything")
         let instance = try model.makeInstance()
         var locals = instance.pose.localTransforms
         locals[1].rotation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))

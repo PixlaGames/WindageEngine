@@ -36,6 +36,25 @@ struct CharacterControllerMeshTests {
         #expect(end.feet.y < 0.01 && end.isGrounded)
     }
 
+    @Test("Up a staircase whose treads do not quite meet: a 3 cm crack is bridged, never fallen through")
+    func upStairsWithCracks() {
+        // Five treads 0.34 m deep and 0.18 m up, each stopping 3 cm short of the next, rising toward −Z; then a deck.
+        var treads: [SIMD3<Float>] = []
+        for i in 0..<5 {
+            let z = -1 - Float(i) * 0.34
+            treads += CollisionMesh.box(centre: SIMD3(0, Float(i + 1) * 0.18 - 0.03, z - 0.155),
+                                        halfExtents: SIMD3(1, 0.03, 0.155))
+        }
+        treads += CollisionMesh.box(centre: SIMD3(0, 0.87, -5.23), halfExtents: SIMD3(2, 0.03, 2.5))
+        let (end, _, _, _) = walk(world(treads), seconds: 1)
+        #expect(abs(end.feet.y - 0.9) < 0.02 && end.feet.z < -4, "up on the deck: \(end.feet)")
+        // Standing over a crack, the floor is the treads either side of it; past an edge there is none.
+        let mesh = CollisionMesh(triangles: treads)
+        #expect(mesh.floor(x: 0, z: -1.325, below: 1) == nil, "the crack itself")
+        #expect(mesh.standingFloor(x: 0, z: -1.325, below: 1).map { abs($0 - 0.36) < 1e-3 } == true)
+        #expect(mesh.standingFloor(x: 1.05, z: -1.15, below: 1) == nil, "past the side of a tread")
+    }
+
     @Test("A boulder stops a body walking into it")
     func stoppedByABoulder() {
         let (end, highest, _, _) = walk(world(CollisionMesh.box(centre: SIMD3(0, 0.75, -3), halfExtents: SIMD3(2, 0.75, 1))))

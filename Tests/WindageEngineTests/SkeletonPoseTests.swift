@@ -236,3 +236,56 @@ struct SkeletonPoseTests {
     pose.set(to: AnimationPlayhead(clip: try AnimationClipTests.swing(jointPaths: ["root/mid"]), skeleton: twin))
     #expect(pose.jointCount == 2)
 }
+
+@Suite("Clips laid over part of a rig")
+@MainActor
+struct SkeletonOverlayTests {
+
+    /// Hips, a spine with an arm under it, and a leg: `root`, `root/spine`, `root/spine/arm`, `root/leg`.
+    private func rig() throws -> Skeleton {
+        try Skeleton(jointPaths: ["root", "root/spine", "root/spine/arm", "root/leg"],
+                     restTransforms: Array(repeating: matrix_identity_float4x4, count: 4),
+                     bindTransforms: Array(repeating: matrix_identity_float4x4, count: 4))
+    }
+
+    /// Every joint the clip names held turned `angle` about Z.
+    private func held(_ angle: Float, joints: [String]) throws -> AnimationClip {
+        let q = simd_quatf(angle: angle, axis: SIMD3(0, 0, 1))
+        return try AnimationClip(name: "held \(angle)", jointPaths: joints, translation: .empty(jointCount: joints.count),
+                                 rotation: JointTrack(times: [0, 1], values: Array(repeating: q, count: joints.count * 2),
+                                                      jointCount: joints.count),
+                                 scale: .empty(jointCount: joints.count))
+    }
+
+    @Test("A joint's mask takes it and everything under it, nothing else")
+    func masks() throws {
+        let skeleton = try rig()
+        #expect(skeleton.mask(from: 1) == [0, 1, 1, 0])
+        #expect(skeleton.mask(from: 1, weight: 0.5) == [0, 0.5, 0.5, 0])
+        #expect(skeleton.mask(from: 3) == [0, 0, 0, 1])
+        #expect(skeleton.mask(from: 9) == [0, 0, 0, 0])
+    }
+
+    @Test("Laid over the spine, a clip moves the spine and arm, and the legs keep their own clip")
+    func overlay() throws {
+        let skeleton = try rig()
+        let all = ["root", "root/spine", "root/spine/arm", "root/leg"]
+        let walk = AnimationPlayhead(clip: try held(0.4, joints: all), skeleton: skeleton)
+        let aim = AnimationPlayhead(clip: try held(1.2, joints: all), skeleton: skeleton)
+        var pose = SkeletonPose(skeleton: skeleton)
+        pose.set(mixing: [(walk, 1)])
+        pose.overlay([(aim, 1)], mask: skeleton.mask(from: 1))
+        let angles = pose.localTransforms.map(\.rotation.angle)
+        #expect(abs(angles[0] - 0.4) < 1e-4 && abs(angles[3] - 0.4) < 1e-4, "the hips and leg keep the walk: \(angles)")
+        #expect(abs(angles[1] - 1.2) < 1e-4 && abs(angles[2] - 1.2) < 1e-4, "the spine and arm take the aim: \(angles)")
+        // Joint-local: the arm rides the hips' turn too.
+        let arm = pose.modelTransform(ofJoint: 2)
+        #expect(abs(atan2(arm.columns.0.y, arm.columns.0.x) - (0.4 + 1.2 + 1.2)) < 1e-3)
+
+        pose.set(mixing: [(walk, 1)])
+        pose.overlay([(aim, 1)], mask: skeleton.mask(from: 1, weight: 0.5))
+        #expect(abs(pose.localTransforms[1].rotation.angle - 0.8) < 1e-3, "half a mask lands half way")
+        pose.overlay([(aim, 0)], mask: skeleton.mask(from: 1))
+        #expect(abs(pose.localTransforms[1].rotation.angle - 0.8) < 1e-3, "no weight changes nothing")
+    }
+}

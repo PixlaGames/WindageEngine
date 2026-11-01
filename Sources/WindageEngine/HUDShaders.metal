@@ -19,12 +19,14 @@ struct HUDVertexIn {
     float2 position [[attribute(0)]];
     float2 uv       [[attribute(1)]];
     float4 color    [[attribute(2)]];
+    float  image    [[attribute(3)]];
 };
 
 struct HUDInOut {
     float4 position [[position]];
     float2 uv;
     float4 color;
+    float  image;
 };
 
 vertex HUDInOut pgeHUDVertex(HUDVertexIn in [[stage_in]])
@@ -33,6 +35,7 @@ vertex HUDInOut pgeHUDVertex(HUDVertexIn in [[stage_in]])
     out.position = float4(in.position, 0.0, 1.0);
     out.uv = in.uv;
     out.color = in.color;
+    out.image = in.image;
     return out;
 }
 
@@ -41,7 +44,13 @@ fragment float4 pgeHUDFragment(HUDInOut in [[stage_in]],
 {
     constexpr sampler atlasSampler(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
 
-    float coverage = atlas.sample(atlasSampler, in.uv).r;
+    float4 texel = atlas.sample(atlasSampler, in.uv);
+    // An image is drawn in its own colours, tinted; the glyph sheet is coverage alone.
+    if (in.image > 0.5) {
+        float a = in.color.a * texel.a;
+        return float4(texel.rgb * in.color.rgb * a, a);
+    }
+    float coverage = texel.r;
     float alpha = in.color.a * coverage;
 
     // Premultiplied, so the standard one / one-minus-source-alpha blend composites correctly over a

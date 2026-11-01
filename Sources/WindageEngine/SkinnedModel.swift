@@ -361,6 +361,30 @@ public final class SkinnedModel {
         materials = geometry.parts.map(\.material)
     }
 
+    /// **The triangles bound to part of the rig**, one list per submesh of ``mesh`` (in ``materials``' order): those whose
+    /// every corner is weighted at least `least` to the joints `mask` weights — a first-person view's arms, a hidden head,
+    /// a severed limb. Build `mask` with ``Skeleton/mask(from:weight:)``. Indices into the merged vertices, as the mesh's
+    /// own are, so a game makes an index buffer of them and draws an instance's posed vertices with it.
+    public func triangles(boundTo mask: [Float], least: Float = 0.5) -> [[UInt32]] {
+        precondition(mask.count == rig.skeleton.jointCount, "mask has \(mask.count) weights for \(rig.skeleton.jointCount) joints")
+        func bound(_ v: UInt32) -> Bool {
+            let j = geometry.joints[Int(v)], w = geometry.weights[Int(v)]
+            var sum: Float = 0
+            for k in 0..<4 where Int(j[k]) < mask.count && mask[Int(j[k])] > 0 { sum += w[k] }
+            return sum >= least
+        }
+        return geometry.parts.map { part in
+            var kept: [UInt32] = []
+            var t = 0
+            while t + 2 < part.indices.count {
+                let a = part.indices[t], b = part.indices[t + 1], c = part.indices[t + 2]
+                if bound(a) && bound(b) && bound(c) { kept += [a, b, c] }
+                t += 3
+            }
+            return kept
+        }
+    }
+
     /// The Model I/O layouts the kernel writes into — the ones an instance keeps a posed copy of, per frame in flight.
     var posedLayouts: Set<Int> {
         var set: Set<Int> = [geometry.position.layout]

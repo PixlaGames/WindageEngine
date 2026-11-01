@@ -16,13 +16,14 @@ import simd
 /// ``InterfaceColor`` lands as the exact value it was authored as.
 ///
 /// **What this is not.** There is no layout, no widgets and no event handling. It draws colored
-/// rectangles, lines, rings, filled outlines and text in screen space, which is enough for a reticle,
-/// a bar, a panel, a marker or a label.
+/// rectangles, lines, rings, filled outlines, text and images in screen space, which is enough for a
+/// reticle, a bar, a panel, a marker, an icon or a label.
 ///
 /// **Every position is a `SIMD2<Float>`**, in the units ``begin(viewportSize:)`` was given, and every
 /// call names the shape it draws: ``fillRect(origin:size:color:)``, ``strokeRect(origin:size:thickness:color:)``,
 /// ``line(from:to:thickness:color:feather:)``, ``fillRing(center:innerRadius:outerRadius:segments:color:feather:)``,
-/// ``fillPolygon(_:color:feather:)`` and ``text(_:atBaseline:pointSize:color:)``. Layout arrives when a title actually needs it and can show
+/// ``fillPolygon(_:color:feather:)``, ``text(_:atBaseline:pointSize:color:)`` and
+/// ``image(_:center:size:rotation:color:)``. Layout arrives when a title actually needs it and can show
 /// what shape it should be — the same extract-when-proven rule as everything else here.
 /// Why a ``HUDRenderer`` could not be made.
 public enum HUDRendererError: Error, CustomStringConvertible, Sendable {
@@ -61,11 +62,16 @@ public final class HUDRenderer {
     /// Screen-space geometry accumulated this frame, in normalized device coordinates.
     private var vertices: [Vertex] = []
     private var viewportSize = SIMD2<Float>(1, 1)
+    /// **Where each texture's vertices begin**, in submission order: nil is the glyph sheet, which every shape
+    /// and every glyph reads. A frame with no images is one run and one draw.
+    private var runs: [(texture: MTLTexture?, start: Int)] = []
 
     private struct Vertex {
         var position: SIMD2<Float>
         var uv: SIMD2<Float>
         var color: SIMD4<Float>
+        /// 0 reads the glyph sheet's coverage; 1 reads an image's own colour and alpha.
+        var image: Float = 0
     }
 
     /// The glyph sheet, which also supplies the opaque texel solid shapes sample.
@@ -125,6 +131,9 @@ public final class HUDRenderer {
             vertexDescriptor.attributes[2].format = .float4
             vertexDescriptor.attributes[2].offset = MemoryLayout<Vertex>.offset(of: \.color)!
             vertexDescriptor.attributes[2].bufferIndex = 0
+            vertexDescriptor.attributes[3].format = .float
+            vertexDescriptor.attributes[3].offset = MemoryLayout<Vertex>.offset(of: \.image)!
+            vertexDescriptor.attributes[3].bufferIndex = 0
             vertexDescriptor.layouts[0].stride = HUDRenderer.vertexStride
             vertexDescriptor.layouts[0].stepFunction = .perVertex
 
@@ -186,6 +195,7 @@ public final class HUDRenderer {
     ///   by the backing scale first. Every position and size after this is in the same units.
     public func begin(viewportSize: SIMD2<Float>) {
         vertices.removeAll(keepingCapacity: true)
+        runs.removeAll(keepingCapacity: true)
         self.viewportSize = SIMD2(max(viewportSize.x, 1), max(viewportSize.y, 1))
     }
 
@@ -476,6 +486,40 @@ public final class HUDRenderer {
         }
     }
 
+    /// **An image**, `size` across and centred on `center`, turned `rotation` radians clockwise on screen, its colours
+    /// multiplied by `color` — white draws it as it is (2026-10-31, for a game's crosshair: a vendor's interface art
+    /// is sprites, and drawn as lines it would not be the art).
+    ///
+    /// **Read in linear light**, so an image made as sRGB (`MTKTextureLoader`'s `.SRGB: true`) composites as its
+    /// author saw it; its alpha is straight, as a PNG's is, and premultiplied here. **The game makes `texture` resident**,
+    /// as it does every texture its own draws read. Images and shapes still composite in the order they were
+    /// submitted: each change of texture is a draw of its own within the HUD's one pass.
+    public func image(_ texture: MTLTexture, center: SIMD2<Float>, size: SIMD2<Float>, rotation: Float = 0,
+                      color: InterfaceColor = InterfaceColor(srgb: SIMD4(1, 1, 1, 1))) {
+        guard color.srgb.w > 0, size.x > 0, size.y > 0 else { return }
+        if runs.last?.texture !== texture {
+            // An empty glyph run left after the last image of this texture is reused rather than drawn empty.
+            if let last = runs.last, last.texture == nil, last.start == vertices.count, runs.count >= 2,
+               runs[runs.count - 2].texture === texture {
+                runs.removeLast()
+            } else {
+                if runs.isEmpty && !vertices.isEmpty { runs.append((nil, 0)) }
+                runs.append((texture, vertices.count))
+            }
+        }
+        let half = size / 2
+        let c = cos(rotation), s = sin(rotation)
+        // Clockwise on screen, where y runs down.
+        func place(_ p: SIMD2<Float>) -> SIMD2<Float> { toDevice(center + SIMD2(p.x * c - p.y * s, p.x * s + p.y * c)) }
+        let corners = [(place(SIMD2(-half.x, -half.y)), SIMD2<Float>(0, 0)), (place(SIMD2(half.x, -half.y)), SIMD2<Float>(1, 0)),
+                       (place(SIMD2(half.x, half.y)), SIMD2<Float>(1, 1)), (place(SIMD2(-half.x, half.y)), SIMD2<Float>(0, 1))]
+        for index in [0, 1, 2, 0, 2, 3] {
+            vertices.append(Vertex(position: corners[index].0, uv: corners[index].1, color: color.linear, image: 1))
+        }
+        // Whatever is drawn next reads the glyph sheet again, unless it is another image.
+        runs.append((nil, vertices.count))
+    }
+
     /// Points, origin top-left, to normalized device coordinates.
     private func toDevice(_ point: SIMD2<Float>) -> SIMD2<Float> {
         SIMD2((point.x / viewportSize.x) * 2 - 1,
@@ -511,8 +555,13 @@ public final class HUDRenderer {
         encoder.setArgumentTable(argumentTable, stages: .vertex)
         encoder.setArgumentTable(argumentTable, stages: .fragment)
         argumentTable.setAddress(vertexBuffer.gpuAddress + UInt64(offset), index: 0)
-        argumentTable.setTexture(font.texture.gpuResourceID, index: 0)
-        encoder.drawPrimitives(primitiveType: .triangle, vertexStart: 0, vertexCount: count)
+        let spans = runs.isEmpty ? [(texture: MTLTexture?.none, start: 0)] : runs
+        for (k, run) in spans.enumerated() {
+            let end = min(k + 1 < spans.count ? spans[k + 1].start : count, count)
+            guard end > run.start else { continue }
+            argumentTable.setTexture((run.texture ?? font.texture).gpuResourceID, index: 0)
+            encoder.drawPrimitives(primitiveType: .triangle, vertexStart: run.start, vertexCount: end - run.start)
+        }
         encoder.popDebugGroup()
     }
 }
