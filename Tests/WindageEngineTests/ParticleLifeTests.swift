@@ -414,3 +414,61 @@ struct ParticleOverLifeTests {
         #expect(!old.unlit && old.sizeOverLife.isEmpty && old.opacityOverLife.isEmpty && old.colourOverLife.isEmpty)
     }
 }
+
+@Suite("Drawing only what shows")
+struct DrawingOnlyWhatShowsTests {
+
+    /// A game reading only the solid scene's depth: the second pass is handed it at the scene's size, and a single
+    /// texel stands in for the colour nobody copied; a particle too faint to show draws nothing.
+    private final class DepthOnly: GameLoop {
+        let renderer: ParticleRenderer
+        var system: ParticleSystem
+        var colourSize = 0, depthSize = 0
+        init(_ renderer: ParticleRenderer) {
+            self.renderer = renderer
+            system = ParticleSystem(recipes: [ParticleRecipe(count: 1, speed: 0, spread: 0, lifetime: 10, size: 2,
+                                                             gravity: 0, drag: 0, color: .one, opacity: 0.001, glows: true)],
+                                    capacity: 2)
+            system.burst(0, at: SIMD3(0, 0, -3), seed: 1)
+        }
+        var wantsOpaqueTextures: Bool { true }
+        var wantsOpaqueColour: Bool { false }
+        func beginFrame() {}
+        func step(deltaTime: Float) {}
+        func viewportSizeChanged(width: Int, height: Int) {}
+        func encode(into encoder: MTL4RenderCommandEncoder, frameSlot: Int, interpolation: Float) {}
+        func encodeTransparent(into encoder: MTL4RenderCommandEncoder, opaque: OpaqueTextures, frameSlot: Int,
+                               interpolation: Float) {
+            colourSize = opaque.colour.width
+            depthSize = opaque.depth.width
+            let projection = simd_float4x4(perspectiveFovY: 1.2, aspectRatio: 1, nearZ: 0.1)
+            renderer.draw(system, into: encoder, frameSlot: frameSlot, viewProjection: projection,
+                          cameraRight: SIMD3(1, 0, 0), cameraUp: SIMD3(0, 1, 0), solidDepth: opaque.depth, nearPlane: 0.1)
+        }
+    }
+
+    @Test("A game reading only the depth gets it, a texel for the colour, and a faint particle draws nothing")
+    @MainActor
+    func depthOnlyAndFaint() throws {
+        guard let device = MTLCreateSystemDefaultDevice(), device.supportsFamily(.metal4) else { return }
+        let frame = try FrameRenderer(device: device)
+        frame.toneMapping = .off
+        let particles = try ParticleRenderer(device: device, capacity: 2, sampleCount: frame.effectiveSampleCount)
+        frame.residencySet.addAllocations(particles.allocations)
+        let game = DepthOnly(particles)   // held here: the engine keeps its game weakly
+        frame.game = game
+        let target = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: FrameRenderer.colorPixelFormat, width: 64,
+                                                              height: 64, mipmapped: false)
+        target.usage = .renderTarget
+        target.storageMode = .shared
+        let output = try #require(device.makeTexture(descriptor: target))
+        frame.residencySet.addAllocation(output)
+        frame.commitResidency()
+        frame.render(into: output)
+        #expect(game.colourSize == 1, "the colour not copied")
+        #expect(game.depthSize == 64, "the depth at the scene's size")
+        var pixel = [UInt8](repeating: 0, count: 4)
+        output.getBytes(&pixel, bytesPerRow: 256, from: MTLRegionMake2D(32, 32, 1, 1), mipmapLevel: 0)
+        #expect(Int(pixel[0]) + Int(pixel[1]) + Int(pixel[2]) == 0, "a particle at a thousandth draws nothing: \(pixel)")
+    }
+}

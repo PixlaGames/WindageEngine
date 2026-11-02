@@ -65,6 +65,12 @@ public protocol GameLoop: AnyObject {
     /// copy. False, the default: one pass, as always.
     var wantsOpaqueTextures: Bool { get }
 
+    /// **Whether the second pass reads the solid scene's colour**, or only its depth (``OpaqueTextures``). A game that
+    /// only needs the depth — a liquid coloured by how deep it is, particles softened where they meet a surface — says
+    /// false, and the colour is not copied every frame: at a few million pixels in half floats, a copy written and never
+    /// read. Then ``OpaqueTextures/colour`` is a single black texel. True, the default.
+    var wantsOpaqueColour: Bool { get }
+
     /// Encode what is drawn over the solid scene and reads it — only when ``wantsOpaqueTextures``. Same targets, same
     /// depth, loaded where the solid pass left them; `opaque` holds that pass's colour and depth, single-sampled.
     ///
@@ -77,6 +83,7 @@ public extension GameLoop {
     func encodePrePasses(into commandBuffer: MTL4CommandBuffer, frameSlot: Int, interpolation: Float) {}
     func encodeHUD(into encoder: MTL4RenderCommandEncoder, frameSlot: Int, interpolation: Float) {}
     var wantsOpaqueTextures: Bool { false }
+    var wantsOpaqueColour: Bool { true }
     func encodeTransparent(into encoder: MTL4RenderCommandEncoder, opaque: OpaqueTextures, frameSlot: Int,
                            interpolation: Float) {}
 }
@@ -205,6 +212,8 @@ public final class FrameRenderer {
     private var multisampleTexture: MTLTexture?
     /// The solid scene's colour and depth for a game that reads them (``OpaqueTextures``); nil until one asks.
     private var opaqueColourTexture: MTLTexture?
+    /// What ``OpaqueTextures/colour`` is for a game that does not read it: one texel, never written.
+    private var blankOpaqueColour: MTLTexture?
     private var opaqueDepthTexture: MTLTexture?
     private var toneMapPipeline: MTLRenderPipelineState?
     private let toneMapArgumentTable: MTL4ArgumentTable
@@ -608,7 +617,7 @@ public final class FrameRenderer {
         let stencil = stencilAttachment(depth)
         if twoPasses {
             // Kept for the second pass, and resolved into the opaque copies.
-            ensureOpaqueTextures(like: scene)
+            ensureOpaqueTextures(like: scene, colour: game.wantsOpaqueColour)
             if depth.sampleCount > 1 {
                 passDescriptor.colorAttachments[0].storeAction = .storeAndMultisampleResolve
                 depthAttachment.resolveTexture = opaqueDepthTexture
@@ -636,15 +645,20 @@ public final class FrameRenderer {
         encoder.barrier(afterQueueStages: .dispatch, beforeStages: .vertex, visibilityOptions: .device)
         game.encode(into: encoder, frameSlot: frameSlot, interpolation: interpolation)
         encoder.endEncoding()
-        guard twoPasses, let opaqueColour = opaqueColourTexture, let opaqueDepth = opaqueDepthTexture else { return true }
+        guard twoPasses, let opaqueDepth = opaqueDepthTexture else { return true }
+        let wantsColour = game.wantsOpaqueColour
+        guard let opaqueColour = wantsColour ? opaqueColourTexture : blankOpaqueColour else { return true }
 
-        // **The copies**: the resolved colour, and — at one sample, where no resolve made it — the depth.
-        guard let copy = commandBuffer.makeComputeCommandEncoder() else { return false }
-        copy.label = "Opaque textures"
-        copy.barrier(afterQueueStages: .fragment, beforeStages: .blit, visibilityOptions: .device)
-        copy.copy(sourceTexture: scene, destinationTexture: opaqueColour)
-        if depth.sampleCount == 1 { copy.copy(sourceTexture: depth, destinationTexture: opaqueDepth) }
-        copy.endEncoding()
+        // **The copies**: the resolved colour when the game reads it, and — at one sample, where no resolve made it — the
+        // depth.
+        if wantsColour || depth.sampleCount == 1 {
+            guard let copy = commandBuffer.makeComputeCommandEncoder() else { return false }
+            copy.label = "Opaque textures"
+            copy.barrier(afterQueueStages: .fragment, beforeStages: .blit, visibilityOptions: .device)
+            if wantsColour { copy.copy(sourceTexture: scene, destinationTexture: opaqueColour) }
+            if depth.sampleCount == 1 { copy.copy(sourceTexture: depth, destinationTexture: opaqueDepth) }
+            copy.endEncoding()
+        }
 
         // **The second pass, over the first**: everything loaded where the solid pass left it.
         let overDescriptor = MTL4RenderPassDescriptor()
@@ -667,9 +681,20 @@ public final class FrameRenderer {
         return true
     }
 
-    /// The opaque copies at the scene's size, made the first time a game asks for them and again after a resize.
-    private func ensureOpaqueTextures(like scene: MTLTexture) {
-        if let colour = opaqueColourTexture, colour.width == scene.width, colour.height == scene.height { return }
+    /// The opaque copies at the scene's size, made the first time a game asks for them and again after a resize — the
+    /// colour only for a game that reads it (``GameLoop/wantsOpaqueColour``).
+    private func ensureOpaqueTextures(like scene: MTLTexture, colour wantsColour: Bool) {
+        if !wantsColour, blankOpaqueColour == nil {
+            let blank = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: FrameRenderer.sceneColorPixelFormat,
+                                                                 width: 1, height: 1, mipmapped: false)
+            blank.usage = .shaderRead
+            blank.storageMode = .private
+            blankOpaqueColour = device.makeTexture(descriptor: blank)
+            blankOpaqueColour?.label = "Opaque Colour (not copied)"
+            if let made = blankOpaqueColour { residencySet.addAllocation(made); residencySet.commit() }
+        }
+        if let depth = opaqueDepthTexture, depth.width == scene.width, depth.height == scene.height,
+           !wantsColour || opaqueColourTexture?.width == scene.width && opaqueColourTexture?.height == scene.height { return }
         let colour = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: FrameRenderer.sceneColorPixelFormat,
                                                               width: scene.width, height: scene.height, mipmapped: false)
         colour.usage = .shaderRead
@@ -679,8 +704,12 @@ public final class FrameRenderer {
         // A render target too: at more than one sample the depth is resolved into it.
         depth.usage = [.shaderRead, .renderTarget]
         depth.storageMode = .private
-        opaqueColourTexture = device.makeTexture(descriptor: colour)
-        opaqueColourTexture?.label = "Opaque Colour"
+        // A game that starts reading the colour at the same size: the old copies go, so they are not held twice.
+        residencySet.removeAllocations([opaqueColourTexture, opaqueDepthTexture].compactMap { $0 })
+        if wantsColour {
+            opaqueColourTexture = device.makeTexture(descriptor: colour)
+            opaqueColourTexture?.label = "Opaque Colour"
+        }
         opaqueDepthTexture = device.makeTexture(descriptor: depth)
         opaqueDepthTexture?.label = "Opaque Depth"
         residencySet.addAllocations([opaqueColourTexture, opaqueDepthTexture].compactMap { $0 })

@@ -75,6 +75,8 @@ public final class ParticleRenderer {
     }
 
     public let capacity: Int
+    /// Below this — half of one step of an 8-bit display — a particle cannot change what is on screen, and is not drawn.
+    static let faintest: Float = 0.5 / 255
     private let pipelineState: MTLRenderPipelineState
     private let depthState: MTLDepthStencilState
     private let argumentTable: MTL4ArgumentTable
@@ -219,6 +221,9 @@ public final class ParticleRenderer {
         for particle in system.particles where particle.isAlive && system.recipes[particle.recipe].mesh == nil {
             guard count < capacity else { break }
             let look = system.appearance(of: particle)
+            // **Nothing too faint to see is drawn** (2026-11-01): a sheet of fog fading in or out still covers its whole
+            // square on screen, and every pixel of it was blended for nothing.
+            guard look.coverage >= Self.faintest || simd_reduce_max(look.color) >= Self.faintest else { continue }
             // Light, and unlit matter, are drawn in their own colour; lit matter takes the light it stands in.
             let recipe = system.recipes[particle.recipe]
             let lit = recipe.glows || recipe.unlit ? look.color : look.color * matterLight
