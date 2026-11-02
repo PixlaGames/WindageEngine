@@ -1,0 +1,80 @@
+#usda 1.0
+# A skinned mesh carrying a blend shape, used by MeshNormalsTests — the shape a character creator
+# exports a face in: its normals written in the file, and a shape (here "pinch") that moves some of
+# its points.
+#
+# **Model I/O drops the normals of a mesh whose blend shapes are bound**, whatever form they are
+# written in; the loaders make them again from the mesh's shape. The mesh is a square pyramid, its
+# apex up at (0, 1, 0) and its base corners at (±0.5, 0, ±0.5), with no base: a smooth normal is
+# straight up at the apex and leans out and up at each corner. The normals written here all say
+# (0, 0, 1) — what the file holds is not what is read.
+(
+    defaultPrim = "Character"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def SkelRoot "Character" (
+    prepend apiSchemas = ["SkelBindingAPI"]
+)
+{
+    def Skeleton "Skeleton" (
+        prepend apiSchemas = ["SkelBindingAPI"]
+    )
+    {
+        uniform matrix4d[] bindTransforms = [( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1) )]
+        uniform token[] joints = ["root"]
+        uniform matrix4d[] restTransforms = [( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1) )]
+    }
+    rel skel:skeleton = </Character/Skeleton>
+
+    def Mesh "Head" (
+        prepend apiSchemas = ["SkelBindingAPI", "MaterialBindingAPI"]
+    )
+    {
+        float3[] extent = [(-0.5, 0, -0.5), (0.5, 1, 0.5)]
+        int[] faceVertexCounts = [3, 3, 3, 3]
+        int[] faceVertexIndices = [4, 0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "vertex"
+        )
+        point3f[] points = [(-0.5, 0, -0.5), (-0.5, 0, 0.5), (0.5, 0, 0.5), (0.5, 0, -0.5), (0, 1, 0)]
+        texCoord2f[] primvars:st = [(0, 0), (0, 1), (1, 1), (1, 0), (0.5, 0.5)] (
+            interpolation = "vertex"
+        )
+        int[] primvars:skel:jointIndices = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (
+            elementSize = 4
+            interpolation = "vertex"
+        )
+        float[] primvars:skel:jointWeights = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] (
+            elementSize = 4
+            interpolation = "vertex"
+        )
+        matrix4d primvars:skel:geomBindTransform = ( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1) )
+        uniform token[] skel:blendShapes = ["pinch"]
+        rel skel:blendShapeTargets = [</Character/Head/pinch>]
+        rel material:binding = </Character/Materials/Skin>
+        uniform token subdivisionScheme = "none"
+
+        def BlendShape "pinch"
+        {
+            uniform vector3f[] offsets = [(0, 0.1, 0)]
+            uniform int[] pointIndices = [4]
+        }
+    }
+
+    def Scope "Materials"
+    {
+        def Material "Skin"
+        {
+            token outputs:surface.connect = </Character/Materials/Skin/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.8, 0.6, 0.5)
+                token outputs:surface
+            }
+        }
+    }
+}

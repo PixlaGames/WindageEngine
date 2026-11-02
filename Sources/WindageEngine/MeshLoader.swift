@@ -175,7 +175,10 @@ public nonisolated enum MeshLoader {
                                named name: String, device: MTLDevice, modelDescriptor: MDLVertexDescriptor,
                                semantics: [Int: String], reportingTo report: ((String) -> Void)?) throws -> [LoadedMesh] {
         let wantsTangents = semantics.values.contains(MDLVertexAttributeTangent)
+        let wantsNormals = semantics.values.contains(MDLVertexAttributeNormal)
         for mesh in allMeshes(in: asset) {
+            // A part whose blend shapes Model I/O read comes without its normals (``MeshNormals``).
+            if wantsNormals { MeshNormals.addIfMissing(to: mesh) }
             if wantsTangents { addTangentsIfNeeded(to: mesh, named: name, reportingTo: report) }
             mesh.vertexDescriptor = modelDescriptor
         }

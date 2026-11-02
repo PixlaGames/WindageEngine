@@ -148,6 +148,8 @@ public nonisolated struct SkinnedGeometry: Sendable {
         var groups: [(indices: [UInt32], material: Material)] = []
 
         for mesh in meshes {
+            // A part whose blend shapes Model I/O read comes without its normals (``MeshNormals``).
+            if normalAttribute != nil { MeshNormals.addIfMissing(to: mesh) }
             if tangentAttribute != nil {
                 mesh.addOrthTanBasis(forTextureCoordinateAttributeNamed: MDLVertexAttributeTextureCoordinate,
                                      normalAttributeNamed: MDLVertexAttributeNormal,
