@@ -72,6 +72,24 @@ public nonisolated struct InstanceBatches<Key: Hashable & Sendable>: Sendable {
         }
     }
 
+    /// **See-through copies, farthest from `eye` first, one batch each** — the order a blended pass needs. Glass that
+    /// does not write depth must be drawn back to front, or a far pane drawn after a near one blends over it, and through
+    /// the near one the far one shows untinted. Instanced by kind, a copy's place in the order is lost, so here each copy
+    /// is its own batch: blended things are few, and a draw each is their price.
+    ///
+    /// `centre` is where a copy is measured from — its bounds' centre in the world. **Copies equally far keep the order
+    /// they were given**, so two panes side by side do not trade places from frame to frame.
+    public init<Copies: Sequence>(farthestFirst copies: Copies, from eye: SIMD3<Float>)
+    where Copies.Element == (key: Key, transform: simd_float4x4, centre: SIMD3<Float>) {
+        let measured = copies.enumerated().map { (order: $0.offset, copy: $0.element,
+                                                  distance: simd_distance_squared($0.element.centre, eye)) }
+            .sorted { $0.distance != $1.distance ? $0.distance > $1.distance : $0.order < $1.order }
+        for (start, each) in measured.enumerated() {
+            batches.append(Batch(key: each.copy.key, start: start, count: 1))
+            transforms.append(each.copy.transform)
+        }
+    }
+
     public var isEmpty: Bool { transforms.isEmpty }
 }
 

@@ -51,6 +51,25 @@ struct InstancingTests {
         #expect(InstanceBatches<String>(transforms: [], runs: []).isEmpty)
     }
 
+    @Test func seeThroughCopiesComeFarthestFirstOneBatchEach() {
+        let copies: [(key: String, transform: simd_float4x4, centre: SIMD3<Float>)] = [
+            ("pane", move(2), SIMD3(2, 0, 0)), ("pane", move(9), SIMD3(9, 0, 0)), ("screen", move(-5), SIMD3(-5, 0, 0)),
+        ]
+        let batches = InstanceBatches(farthestFirst: copies, from: .zero)
+        #expect(batches.transforms.map { $0.columns.3.x } == [9, -5, 2])
+        #expect(batches.batches.map(\.key) == ["pane", "screen", "pane"], "the order kept, not grouped by kind")
+        #expect(batches.batches.map(\.count) == [1, 1, 1])
+        #expect(batches.batches.map(\.start) == [0, 1, 2])
+    }
+
+    @Test func seeThroughCopiesEquallyFarKeepTheirOrder() {
+        let copies: [(key: Int, transform: simd_float4x4, centre: SIMD3<Float>)] =
+            (0..<20).map { ($0, move(Float($0)), SIMD3(0, 0, 4)) }
+        #expect(InstanceBatches(farthestFirst: copies, from: .zero).batches.map(\.key) == Array(0..<20))
+        let none: [(key: Int, transform: simd_float4x4, centre: SIMD3<Float>)] = []
+        #expect(InstanceBatches(farthestFirst: none, from: .zero).isEmpty)
+    }
+
     @Test func nothingGivenIsEmpty() {
         let batches = InstanceBatches<String>([])
         #expect(batches.isEmpty && batches.batches.isEmpty)
