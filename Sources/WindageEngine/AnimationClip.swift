@@ -232,6 +232,35 @@ public nonisolated struct AnimationClip: Sendable {
                       translation: translation, rotation: rotation, scale: scale)
     }
 
+    /// **How far `joint` travels over the clip**: its translation at the last key less the first, in its parent's space —
+    /// a clip's root motion, which is the ground speed a gait was authored at (``LocomotionBlend/Gait/speed``) once it is
+    /// divided by ``duration`` and put in the model's units. Zero for a joint the translation channel does not carry.
+    public func travel(ofJoint joint: Int) -> SIMD3<Float> {
+        guard !translation.isEmpty, joint >= 0, joint < translation.jointCount else { return .zero }
+        return translation[translation.times.count - 1, joint] - translation[0, joint]
+    }
+
+    /// **The clip with `joint`'s travel along the ground taken out**: its x and z, in its parent's space, held where the
+    /// first key has them, and its height and every other joint left alone.
+    ///
+    /// **For a clip authored with root motion, played where a game puts the figure.** A walk that carries its root a
+    /// stride forward over the cycle, played in place, moves the figure a stride ahead and snaps it back on every loop;
+    /// held, the game moves the figure and the clip moves its legs. The parent's y is taken as up, as every rig this
+    /// engine reads has it.
+    public func inPlace(joint: Int) -> AnimationClip {
+        guard !translation.isEmpty, joint >= 0, joint < translation.jointCount else { return self }
+        let start = translation[0, joint]
+        var values = translation.values
+        for key in translation.times.indices {
+            let index = key * translation.jointCount + joint
+            values[index].x = start.x
+            values[index].z = start.z
+        }
+        guard let held = try? JointTrack(times: translation.times, values: values, jointCount: translation.jointCount)
+        else { return self }
+        return AnimationClip(validatedName: name, jointPaths: jointPaths, translation: held, rotation: rotation, scale: scale)
+    }
+
     /// Wraps or clamps a time into the clip's own range.
     ///
     /// **A looping clip wraps rather than clamping**, and its first and last keys are expected to

@@ -156,6 +156,38 @@ struct AnimationClipTests {
             scale: .empty(jointCount: count))
     }
 
+    /// Two joints; the second walks two metres forward along z over one second, bobbing up and down, the first stays.
+    static func stride() throws -> AnimationClip {
+        try AnimationClip(
+            name: "stride", jointPaths: ["base", "base/root"],
+            translation: try JointTrack(times: [0, 0.5, 1],
+                                        values: [SIMD3(0, 0, 0), SIMD3(0, 0, 0),
+                                                 SIMD3(0, 0, 0), SIMD3(0.1, 0.2, 1),
+                                                 SIMD3(0, 0, 0), SIMD3(0, 0, 2)],
+                                        jointCount: 2),
+            rotation: .empty(jointCount: 2), scale: .empty(jointCount: 2))
+    }
+
+    @Test("A clip's travel is its joint's last key less its first")
+    func travel() throws {
+        let clip = try Self.stride()
+        #expect(clip.travel(ofJoint: 1) == SIMD3(0, 0, 2))
+        #expect(clip.travel(ofJoint: 0) == .zero)
+        #expect(clip.travel(ofJoint: 7) == .zero, "a joint the clip does not have travels nowhere")
+        #expect(try Self.swing().travel(ofJoint: 0) == .zero, "no translation keys, no travel")
+    }
+
+    @Test("In place, a joint's travel along the ground is held and its height kept")
+    func inPlace() throws {
+        let held = try Self.stride().inPlace(joint: 1)
+        #expect(held.travel(ofJoint: 1) == .zero)
+        let rest = JointTransform.identity
+        let middle = held.sample(joint: 1, at: 0.5, rest: rest).translation
+        #expect(middle == SIMD3(0, 0.2, 0), "the bob stays; the stride and the sway go")
+        #expect(held.name == "stride" && held.duration == 1)
+        #expect(held.sample(joint: 0, at: 0.5, rest: rest).translation == .zero)
+    }
+
     @Test("A clip whose channels are for a different number of joints is refused")
     func mismatchedChannelsAreRefused() throws {
         let twoJoints = try JointTrack(times: [0], values: [SIMD3<Float>.zero, .zero], jointCount: 2)
