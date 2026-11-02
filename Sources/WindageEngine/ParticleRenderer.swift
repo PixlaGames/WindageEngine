@@ -218,21 +218,25 @@ public final class ParticleRenderer {
         let instances = instanceBuffer.contents().advanced(by: base)
             .bindMemory(to: Instance.self, capacity: capacity)
         var count = 0
-        for particle in system.particles where particle.isAlive && system.recipes[particle.recipe].mesh == nil {
+        let recipes = system.recipes
+        for particle in system.particles where particle.isAlive {
             guard count < capacity else { break }
-            let look = system.appearance(of: particle)
+            // **Its recipe read once**, and its look worked out once (``ParticleSystem/appearance(of:recipe:)``).
+            let recipe = recipes[particle.recipe]
+            guard recipe.mesh == nil else { continue }
+            let look = ParticleSystem.appearance(of: particle, recipe: recipe)
             // **Nothing too faint to see is drawn** (2026-11-01): a sheet of fog fading in or out still covers its whole
             // square on screen, and every pixel of it was blended for nothing.
             guard look.coverage >= Self.faintest || simd_reduce_max(look.color) >= Self.faintest else { continue }
             // Light, and unlit matter, are drawn in their own colour; lit matter takes the light it stands in.
-            let recipe = system.recipes[particle.recipe]
             let lit = recipe.glows || recipe.unlit ? look.color : look.color * matterLight
-            let cell = system.recipes[particle.recipe].sprite.flatMap { sprite in
+            let cell = recipe.sprite.flatMap { sprite in
                 atlas.map { $0.rect(column: sprite % $0.columns, row: sprite / $0.columns) }
             } ?? .zero
-            let (right, up) = system.extent(of: particle, cameraRight: cameraRight, cameraUp: cameraUp)
+            let (right, up) = ParticleSystem.extent(of: particle, recipe: recipe, size: look.size,
+                                                    cameraRight: cameraRight, cameraUp: cameraUp)
             // Its softness rides in the position's w, which the shader has no other use for.
-            instances[count] = Instance(position: SIMD4(particle.position, system.recipes[particle.recipe].softness),
+            instances[count] = Instance(position: SIMD4(particle.position, recipe.softness),
                                         colorAndCoverage: SIMD4(lit, look.coverage),
                                         spriteCell: cell,
                                         right: SIMD4(right, 0), up: SIMD4(up, 0))

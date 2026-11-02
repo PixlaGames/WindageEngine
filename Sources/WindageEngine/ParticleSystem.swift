@@ -200,8 +200,13 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
         guard let first = keys.first, let last = keys.last else { return 1 }
         if t <= first.x { return first.y }
         if t >= last.x { return last.y }
-        for (a, b) in zip(keys, keys.dropFirst()) where t <= b.x {
-            return b.x > a.x ? a.y + (b.y - a.y) * (t - a.x) / (b.x - a.x) : b.y
+        // A `while`, not `zip` or a range: read for every particle every frame, and a sequence's iterator is most of the
+        // cost in an unoptimised build.
+        var i = 1
+        while i < keys.count {
+            let a = keys[i - 1], b = keys[i]
+            if t <= b.x { return b.x > a.x ? a.y + (b.y - a.y) * (t - a.x) / (b.x - a.x) : b.y }
+            i += 1
         }
         return last.y
     }
@@ -212,7 +217,11 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
         func rgb(_ k: SIMD4<Float>) -> SIMD3<Float> { SIMD3(k.y, k.z, k.w) }
         if t <= first.x { return rgb(first) }
         if t >= last.x { return rgb(last) }
-        for (a, b) in zip(keys, keys.dropFirst()) where t <= b.x {
+        var i = 1
+        while i < keys.count {
+            let a = keys[i - 1], b = keys[i]
+            i += 1
+            guard t <= b.x else { continue }
             let f = b.x > a.x ? (t - a.x) / (b.x - a.x) : 1
             return simd_mix(rgb(a), rgb(b), SIMD3(repeating: f))
         }
@@ -374,6 +383,17 @@ public nonisolated struct ParticleSystem: Sendable {
 
     public var liveCount: Int { particles.reduce(0) { $1.isAlive ? $0 + 1 : $0 } }
 
+    /// **Whether any particle is alive** — stopping at the first, where ``liveCount`` walks them all. What a renderer asks
+    /// every frame (is there anything to draw? does a second pass need the solid depth?), so it should cost nothing.
+    public var hasLive: Bool {
+        var i = 0
+        while i < particles.count {
+            if particles[i].isAlive { return true }
+            i += 1
+        }
+        return false
+    }
+
     /// Everything alive, for a renderer. Allocates; a renderer that cares iterates ``particles``.
     public var live: [Particle] { particles.filter(\.isAlive) }
 
@@ -494,7 +514,13 @@ public nonisolated struct ParticleSystem: Sendable {
     /// How a particle looks at its current age: its color **premultiplied** by opacity, and its
     /// coverage — zero for anything that glows. See ``ParticleRecipe/glows``.
     public func appearance(of particle: Particle) -> (color: SIMD3<Float>, coverage: Float, size: Float) {
-        let r = recipes[particle.recipe]
+        Self.appearance(of: particle, recipe: recipes[particle.recipe])
+    }
+
+    /// The same, for a recipe already in hand — **a renderer reads each particle's recipe once**, not once for each thing
+    /// it asks (2026-11-02): copying a recipe, arrays and all, three or four times a particle was most of an unoptimised
+    /// build's particle cost — a thousand specks of goop glow, 5 ms of a Debug frame.
+    static func appearance(of particle: Particle, recipe r: ParticleRecipe) -> (color: SIMD3<Float>, coverage: Float, size: Float) {
         let t = particle.progress
         let opacity: Float
         if r.opacityOverLife.isEmpty {
@@ -515,8 +541,15 @@ public nonisolated struct ParticleSystem: Sendable {
     public func extent(of particle: Particle, cameraRight: SIMD3<Float>, cameraUp: SIMD3<Float>)
         -> (right: SIMD3<Float>, up: SIMD3<Float>) {
         let r = recipes[particle.recipe]
-        let half = appearance(of: particle).size * 0.5
-        let width = half * width(of: particle)
+        return Self.extent(of: particle, recipe: r, size: Self.appearance(of: particle, recipe: r).size,
+                           cameraRight: cameraRight, cameraUp: cameraUp)
+    }
+
+    /// The same, for a recipe in hand and a size already worked out (``appearance(of:recipe:)``).
+    static func extent(of particle: Particle, recipe r: ParticleRecipe, size: Float, cameraRight: SIMD3<Float>,
+                       cameraUp: SIMD3<Float>) -> (right: SIMD3<Float>, up: SIMD3<Float>) {
+        let half = size * 0.5
+        let width = half * width(of: particle, recipe: r)
         var height = half * r.aspect
         var along: SIMD3<Float>
         switch r.alignment {
@@ -545,7 +578,7 @@ public nonisolated struct ParticleSystem: Sendable {
     /// mesh particles are.
     public func meshTransform(of particle: Particle) -> simd_float4x4 {
         let r = recipes[particle.recipe]
-        let size = appearance(of: particle).size
+        let size = Self.appearance(of: particle, recipe: r).size
         var right = SIMD3<Float>(1, 0, 0), up = SIMD3<Float>(0, 1, 0), forward = SIMD3<Float>(0, 0, 1)
         let speed = simd_length(particle.velocity)
         if r.alignment == .velocity, speed > 1e-4 {
@@ -561,7 +594,10 @@ public nonisolated struct ParticleSystem: Sendable {
     /// **How wide it is drawn against its size, 0…1** — a wingbeat for a recipe that flaps, else 1. The width closes
     /// to a quarter and opens again: a pair of wings seen from above, beating.
     public func width(of particle: Particle) -> Float {
-        let r = recipes[particle.recipe]
+        Self.width(of: particle, recipe: recipes[particle.recipe])
+    }
+
+    static func width(of particle: Particle, recipe r: ParticleRecipe) -> Float {
         guard r.flapRate > 0 else { return 1 }
         let beat = abs(cos((particle.age * r.flapRate + particle.seed) * .pi))
         return 0.25 + 0.75 * beat

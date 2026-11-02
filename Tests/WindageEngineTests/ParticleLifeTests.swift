@@ -39,6 +39,33 @@ struct ParticleLifeTests {
         #expect(moving.count > system.liveCount / 2, "a wanderer that does not wander")
     }
 
+    @Test("Whether any are alive: none in an empty system, some in a swarm, none once all have died")
+    func hasLive() {
+        var system = ParticleSystem(recipes: [butterfly], capacity: 64)
+        #expect(!system.hasLive)
+        system.burst(0, at: .zero, seed: 1)
+        #expect(system.hasLive && system.liveCount == 1)
+        // A butterfly lives fourteen seconds; past that, its slot is dead but still there.
+        for _ in 0..<(16 * 60) { system.step(deltaTime: 1.0 / 60) }
+        #expect(!system.particles.isEmpty && !system.hasLive && system.liveCount == 0)
+        #expect(swarm().hasLive == (swarm().liveCount > 0))
+    }
+
+    @Test("A recipe's look, worked out with the recipe in hand, is the same as asked of the system")
+    func appearanceInHand() {
+        let system = swarm()
+        for particle in system.live {
+            let recipe = system.recipes[particle.recipe]
+            let inHand = ParticleSystem.appearance(of: particle, recipe: recipe)
+            let asked = system.appearance(of: particle)
+            #expect(inHand.color == asked.color && inHand.coverage == asked.coverage && inHand.size == asked.size)
+            let extent = ParticleSystem.extent(of: particle, recipe: recipe, size: inHand.size,
+                                               cameraRight: SIMD3(1, 0, 0), cameraUp: SIMD3(0, 1, 0))
+            let askedExtent = system.extent(of: particle, cameraRight: SIMD3(1, 0, 0), cameraUp: SIMD3(0, 1, 0))
+            #expect(extent.right == askedExtent.right && extent.up == askedExtent.up)
+        }
+    }
+
     @Test("The same swarm flies the same way twice, and its members do not move as one")
     func deterministicAndIndividual() {
         let a = swarm(), b = swarm()
