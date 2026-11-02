@@ -64,9 +64,14 @@ public final class ParticleRenderer {
     /// as a soft disc.
     public let atlas: DecalAtlas?
     private let spriteTexture: MTLTexture
+    /// What stands in for the solid scene's depth when a frame has none: a shader that reads a texture needs one bound.
+    private let blankDepth: MTLTexture
 
     struct Frame {
         var viewProjection: simd_float4x4
+        /// x: the camera's near plane, for turning a reversed-Z depth into distance (near ÷ depth); y: 1 when the solid
+        /// scene's depth is bound for soft particles (``ParticleRecipe/softness``).
+        var depth: SIMD4<Float> = .zero
     }
 
     public let capacity: Int
@@ -109,6 +114,14 @@ public final class ParticleRenderer {
                             bytesPerRow: 4)
             spriteTexture = texture
         }
+        let depthBlank = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: 1, height: 1,
+                                                                  mipmapped: false)
+        depthBlank.usage = .shaderRead
+        depthBlank.storageMode = .private
+        guard let blankDepth = device.makeTexture(descriptor: depthBlank) else {
+            throw ParticleRendererError.couldNotCreate("blank depth texture")
+        }
+        self.blankDepth = blankDepth
         instanceBytes = MemoryLayout<Instance>.stride * self.capacity
         do {
             let library = try ShaderLibrary.make(device: device, bundle: .module,
@@ -162,7 +175,7 @@ public final class ParticleRenderer {
 
         let table = MTL4ArgumentTableDescriptor()
         table.maxBufferBindCount = 2
-        table.maxTextureBindCount = 1
+        table.maxTextureBindCount = 2
         do {
             argumentTable = try device.makeArgumentTable(descriptor: table)
         } catch {
@@ -170,7 +183,7 @@ public final class ParticleRenderer {
         }
     }
 
-    public var allocations: [any MTLAllocation] { [instanceBuffer, frameBuffer, spriteTexture] }
+    public var allocations: [any MTLAllocation] { [instanceBuffer, frameBuffer, spriteTexture, blankDepth] }
 
     /// Draws every live particle, in one instanced draw.
     ///
@@ -185,7 +198,10 @@ public final class ParticleRenderer {
     ///     `right` and `up`, an orbiting editor's, a cutscene's.
     ///   - matterLight: the radiance a perfectly white speck of dust would scatter here — see
     ///     ``ProceduralSky/matterLight``. Multiplies every particle that does not glow; light ignores it.
-    /// - Returns: how many were drawn.
+    ///   - solidDepth: **the solid scene's depth, for soft particles** (``ParticleRecipe/softness``) — the engine's
+    ///     ``OpaqueTextures/depth`` when a game draws in two passes. Nil draws every particle hard.
+    ///   - nearPlane: the camera's near plane, which turns that depth into distance.
+    /// - Returns: how many were drawn. **A ``ParticleRecipe/mesh`` particle is not** — the game draws those.
     @discardableResult
     public func draw(_ system: ParticleSystem,
                      into encoder: MTL4RenderCommandEncoder,
@@ -193,20 +209,25 @@ public final class ParticleRenderer {
                      viewProjection: simd_float4x4,
                      cameraRight: SIMD3<Float>,
                      cameraUp: SIMD3<Float>,
-                     matterLight: SIMD3<Float> = SIMD3(repeating: 1)) -> Int {
+                     matterLight: SIMD3<Float> = SIMD3(repeating: 1),
+                     solidDepth: MTLTexture? = nil,
+                     nearPlane: Float = 0) -> Int {
         let base = instanceBytes * frameSlot
         let instances = instanceBuffer.contents().advanced(by: base)
             .bindMemory(to: Instance.self, capacity: capacity)
         var count = 0
-        for particle in system.particles where particle.isAlive {
+        for particle in system.particles where particle.isAlive && system.recipes[particle.recipe].mesh == nil {
             guard count < capacity else { break }
             let look = system.appearance(of: particle)
-            let lit = system.recipes[particle.recipe].glows ? look.color : look.color * matterLight
+            // Light, and unlit matter, are drawn in their own colour; lit matter takes the light it stands in.
+            let recipe = system.recipes[particle.recipe]
+            let lit = recipe.glows || recipe.unlit ? look.color : look.color * matterLight
             let cell = system.recipes[particle.recipe].sprite.flatMap { sprite in
                 atlas.map { $0.rect(column: sprite % $0.columns, row: sprite / $0.columns) }
             } ?? .zero
             let (right, up) = system.extent(of: particle, cameraRight: cameraRight, cameraUp: cameraUp)
-            instances[count] = Instance(position: SIMD4(particle.position, 1),
+            // Its softness rides in the position's w, which the shader has no other use for.
+            instances[count] = Instance(position: SIMD4(particle.position, system.recipes[particle.recipe].softness),
                                         colorAndCoverage: SIMD4(lit, look.coverage),
                                         spriteCell: cell,
                                         right: SIMD4(right, 0), up: SIMD4(up, 0))
@@ -214,7 +235,8 @@ public final class ParticleRenderer {
         }
         guard count > 0 else { return 0 }
 
-        var frame = Frame(viewProjection: viewProjection)
+        var frame = Frame(viewProjection: viewProjection,
+                          depth: SIMD4(nearPlane, solidDepth != nil && nearPlane > 0 ? 1 : 0, 0, 0))
         let frameOffset = ParticleRenderer.frameStride * frameSlot
         frameBuffer.contents().advanced(by: frameOffset)
             .copyMemory(from: &frame, byteCount: MemoryLayout<Frame>.size)
@@ -225,6 +247,7 @@ public final class ParticleRenderer {
         encoder.setCullMode(.none)
         encoder.setArgumentTable(argumentTable, stages: [.vertex, .fragment])
         argumentTable.setTexture(spriteTexture.gpuResourceID, index: 0)
+        argumentTable.setTexture((solidDepth ?? blankDepth).gpuResourceID, index: 1)
         argumentTable.setAddress(instanceBuffer.gpuAddress + UInt64(base), index: 0)
         argumentTable.setAddress(frameBuffer.gpuAddress + UInt64(frameOffset), index: 1)
         encoder.drawPrimitives(primitiveType: .triangleStrip, vertexStart: 0, vertexCount: 4,

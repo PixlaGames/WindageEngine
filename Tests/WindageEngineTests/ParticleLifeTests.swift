@@ -244,3 +244,173 @@ struct ParticleSpriteTests {
         #expect(Int(pixel[1]) > 150 && Int(pixel[2]) < 60, "the sprite's centre is \(pixel)")
     }
 }
+
+@Suite("Particles that land, and what follows them")
+struct ParticleFollowingTests {
+
+    private let step: Float = 1.0 / 60
+    /// A leap that lands, followed by a sit that leads to the next leap — a frog crossing the goop, three times over.
+    private let leap = ParticleRecipe(count: 1, speed: 6, spread: 0, lifetime: 5, size: 1, gravity: -9.8, drag: 0,
+                                      color: .one, alignment: .velocity, lands: true, then: 1, generations: 4, mesh: "Leap")
+    private let sit = ParticleRecipe(count: 1, speed: 0, spread: 0, lifetime: 0.5, size: 1, gravity: 0, drag: 0,
+                                     color: .one, then: 0, generations: 4, mesh: "Sit")
+
+    @Test("A leap lands at the height it was born at, and what follows is born there, until the line runs out")
+    func leapsAndSits() {
+        var system = ParticleSystem(recipes: [leap, sit], capacity: 16)
+        system.burst(0, at: SIMD3(2, 0.5, -1), seed: 3)
+        var sits = 0, deepest = 0, alive = true
+        var lastSit: SIMD3<Float>?
+        for _ in 0..<(60 * 20) {
+            system.step(deltaTime: step)
+            for p in system.live {
+                deepest = max(deepest, p.generation)
+                if p.recipe == 1, p.age == 0 {
+                    sits += 1
+                    lastSit = p.position
+                }
+                #expect(p.position.y >= 0.5 - 1e-4, "never below the ground it was born on")
+            }
+            alive = system.liveCount > 0
+        }
+        #expect(sits == 2, "leap, sit, leap, sit, leap — the fifth generation throws nothing")
+        #expect(deepest == 4)
+        #expect(!alive, "the line ran out")
+        #expect(abs((lastSit?.y ?? 0) - 0.5) < 1e-4, "sat where it landed")
+    }
+
+    @Test("A burst of what follows: as many as it says, and none past its generations")
+    func thenCount() {
+        let pop = ParticleRecipe(count: 1, speed: 0, spread: 0, lifetime: 0.2, size: 1, gravity: 0, drag: 0, color: .one,
+                                 then: 1, thenCount: 3, generations: 1)
+        let splash = ParticleRecipe(count: 1, speed: 1, spread: 1, lifetime: 2, size: 0.1, gravity: 0, drag: 0, color: .one)
+        var system = ParticleSystem(recipes: [pop, splash], capacity: 16)
+        system.burst(0, at: .zero, seed: 1)
+        for _ in 0..<30 { system.step(deltaTime: step) }
+        #expect(system.live.filter { $0.recipe == 1 }.count == 3)
+        #expect(system.live.allSatisfy { $0.generation == 1 })
+    }
+
+    @Test("Softness, landing, what follows and a mesh survive being saved; a file without them takes none")
+    func saved() throws {
+        let data = try JSONEncoder().encode(leap)
+        #expect(try JSONDecoder().decode(ParticleRecipe.self, from: data) == leap)
+        var soft = ParticleRecipe(count: 1, speed: 0, spread: 0, lifetime: 1, size: 1, color: .one)
+        soft.softness = 0.5
+        #expect(try JSONDecoder().decode(ParticleRecipe.self, from: JSONEncoder().encode(soft)).softness == 0.5)
+        let old = try JSONDecoder().decode(ParticleRecipe.self, from: Data(#"{"color":[1,1,1]}"#.utf8))
+        #expect(old.softness == 0 && !old.lands && old.then == nil && old.mesh == nil)
+    }
+
+    @Test("A mesh particle is placed at its size, along its motion when it says, square to the world otherwise")
+    func meshTransform() {
+        var system = ParticleSystem(recipes: [leap, sit], capacity: 4)
+        system.burst(0, at: SIMD3(1, 0, 0), direction: SIMD3(0, 1, 0), seed: 9)
+        system.step(deltaTime: step)
+        let p = system.live[0]
+        let m = system.meshTransform(of: p)
+        let size = system.appearance(of: p).size
+        let forward = SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z)
+        #expect(abs(simd_length(forward) - size) < 1e-4)
+        #expect(simd_distance(forward / size, simd_normalize(p.velocity)) < 1e-4, "nose along its motion")
+        #expect(simd_distance(SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z), p.position) < 1e-6)
+        var still = ParticleSystem(recipes: [sit], capacity: 1)
+        still.burst(0, at: SIMD3(0, 2, 0), seed: 1)
+        let s = still.meshTransform(of: still.live[0])
+        #expect(abs(s.columns.0.x - still.live[0].size) < 1e-5 && s.columns.0.y == 0 && s.columns.1.y > 0)
+    }
+
+    /// Drawn in the second pass with the solid scene's depth bound: a disc with softness shows (nothing solid behind it),
+    /// and a mesh particle beside it draws nothing — the game draws those.
+    private final class Soft: GameLoop {
+        let renderer: ParticleRenderer
+        var system: ParticleSystem
+        init(_ renderer: ParticleRenderer) {
+            self.renderer = renderer
+            var disc = ParticleRecipe(count: 1, speed: 0, spread: 0, lifetime: 10, size: 2, gravity: 0, drag: 0,
+                                      color: .one, glows: true)
+            disc.softness = 1
+            let mesh = ParticleRecipe(count: 1, speed: 0, spread: 0, lifetime: 10, size: 2, gravity: 0, drag: 0,
+                                      color: .one, glows: true, mesh: "Frog")
+            system = ParticleSystem(recipes: [disc, mesh], capacity: 4)
+            system.burst(0, at: SIMD3(-0.9, 0, -3), seed: 1)
+            system.burst(1, at: SIMD3(0.9, 0, -3), seed: 2)
+        }
+        var wantsOpaqueTextures: Bool { true }
+        func beginFrame() {}
+        func step(deltaTime: Float) {}
+        func viewportSizeChanged(width: Int, height: Int) {}
+        func encode(into encoder: MTL4RenderCommandEncoder, frameSlot: Int, interpolation: Float) {}
+        func encodeTransparent(into encoder: MTL4RenderCommandEncoder, opaque: OpaqueTextures, frameSlot: Int,
+                               interpolation: Float) {
+            let projection = simd_float4x4(perspectiveFovY: 1.2, aspectRatio: 1, nearZ: 0.1)
+            renderer.draw(system, into: encoder, frameSlot: frameSlot, viewProjection: projection,
+                          cameraRight: SIMD3(1, 0, 0), cameraUp: SIMD3(0, 1, 0), solidDepth: opaque.depth, nearPlane: 0.1)
+        }
+    }
+
+    @Test("Drawn over the solid scene with its depth, a soft disc shows and a mesh particle is left to the game")
+    @MainActor
+    func softAndMesh() throws {
+        guard let device = MTLCreateSystemDefaultDevice(), device.supportsFamily(.metal4) else { return }
+        let frame = try FrameRenderer(device: device)
+        frame.toneMapping = .off
+        let particles = try ParticleRenderer(device: device, capacity: 4, sampleCount: frame.effectiveSampleCount)
+        frame.residencySet.addAllocations(particles.allocations)
+        let game = Soft(particles)   // held here: the engine keeps its game weakly
+        frame.game = game
+        let target = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: FrameRenderer.colorPixelFormat, width: 64,
+                                                              height: 64, mipmapped: false)
+        target.usage = .renderTarget
+        target.storageMode = .shared
+        let output = try #require(device.makeTexture(descriptor: target))
+        frame.residencySet.addAllocation(output)
+        frame.commitResidency()
+        frame.render(into: output)
+        func pixel(_ x: Int) -> [UInt8] {
+            var p = [UInt8](repeating: 0, count: 4)
+            output.getBytes(&p, bytesPerRow: 256, from: MTLRegionMake2D(x, 32, 1, 1), mipmapLevel: 0)
+            return p
+        }
+        let disc = pixel(17), mesh = pixel(47)
+        #expect(Int(disc[1]) > 100, "the soft disc shows: \(disc)")
+        #expect(Int(mesh[0]) + Int(mesh[1]) + Int(mesh[2]) < 30, "the mesh particle is not drawn: \(mesh)")
+    }
+}
+
+@Suite("A particle over its life")
+struct ParticleOverLifeTests {
+
+    @Test("Size, opacity and colour follow their keys in straight lines, held past the ends")
+    func curves() {
+        var recipe = ParticleRecipe(count: 1, speed: 0, spread: 0, lifetime: 10, size: 2, gravity: 0, drag: 0,
+                                    color: SIMD3(1, 0.5, 0.25), opacity: 0.5)
+        recipe.sizeOverLife = [SIMD2(0, 0.25), SIMD2(0.5, 1), SIMD2(1, 0.5)]
+        recipe.opacityOverLife = [SIMD2(0.1, 1), SIMD2(1, 0)]
+        recipe.colourOverLife = [SIMD4(0, 1, 1, 1), SIMD4(1, 0, 0, 1)]
+        #expect(ParticleRecipe.curve(recipe.sizeOverLife, at: 0.25) == 0.625)
+        #expect(ParticleRecipe.curve(recipe.opacityOverLife, at: 0) == 1, "held before the first key")
+        #expect(ParticleRecipe.curve([SIMD2<Float>](), at: 0.3) == 1, "no keys: unchanged")
+        var system = ParticleSystem(recipes: [recipe], capacity: 1)
+        system.burst(0, at: .zero, seed: 4)
+        let lifetime = system.live[0].lifetime
+        while system.live.first.map({ $0.progress < 0.5 }) ?? false { system.step(deltaTime: lifetime / 1000) }
+        let p = system.live[0], look = system.appearance(of: p)
+        #expect(abs(look.size - p.size * ParticleRecipe.curve(recipe.sizeOverLife, at: p.progress)) < 1e-5)
+        let opacity = 0.5 * ParticleRecipe.curve(recipe.opacityOverLife, at: p.progress)
+        #expect(abs(look.coverage - opacity) < 1e-5)
+        let tint = ParticleRecipe.curve(recipe.colourOverLife, at: p.progress)
+        #expect(simd_length(look.color - recipe.color * tint * opacity) < 1e-5, "premultiplied, tinted")
+    }
+
+    @Test("Unlit and the curves survive being saved; a file without them has none")
+    func saved() throws {
+        var recipe = ParticleRecipe(count: 1, speed: 0, spread: 0, lifetime: 1, size: 1, color: .one, unlit: true,
+                                    sizeOverLife: [SIMD2(0, 0), SIMD2(1, 1)], opacityOverLife: [SIMD2(0.5, 0.4)],
+                                    colourOverLife: [SIMD4(0, 0.1, 1, 0.2)])
+        recipe.softness = 1
+        #expect(try JSONDecoder().decode(ParticleRecipe.self, from: JSONEncoder().encode(recipe)) == recipe)
+        let old = try JSONDecoder().decode(ParticleRecipe.self, from: Data(#"{"color":[1,1,1]}"#.utf8))
+        #expect(!old.unlit && old.sizeOverLife.isEmpty && old.opacityOverLife.isEmpty && old.colourOverLife.isEmpty)
+    }
+}

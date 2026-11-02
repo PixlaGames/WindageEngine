@@ -13,7 +13,7 @@ using namespace metal;
 /// there is no padding for the two sides to disagree about — the lesson this codebase has learned
 /// three times already.
 struct WEParticle {
-    float4 position;              // xyz world position
+    float4 position;              // xyz world position; w: how many metres it fades over where it meets the solid scene
     float4 colourAndCoverage;     // rgb colour premultiplied by opacity, a coverage (0 for light)
     float4 spriteCell;            // atlas u0, v0, du, dv — du 0 for a soft disc
     float4 right;                 // xyz half its width, in the world
@@ -22,6 +22,7 @@ struct WEParticle {
 
 struct WEParticleFrame {
     float4x4 viewProjection;
+    float4 depth;                 // x: the near plane; y: 1 when the solid scene's depth is bound
 };
 
 struct WEParticleOut {
@@ -30,6 +31,8 @@ struct WEParticleOut {
     float4 colour;
     float2 uv;
     float sprite;
+    float distance;               // along the view, as the solid scene's depth reckons it (clip w)
+    float softness;
 };
 
 /// **Expanded from one instance in the vertex shader**, so the CPU writes a position, a colour and two half-edges per
@@ -53,6 +56,8 @@ vertex WEParticleOut weParticleVertex(uint vertexID [[vertex_id]],
     // Top of the image at the quad's top.
     out.uv = p.spriteCell.xy + float2(corner.x * 0.5 + 0.5, 0.5 - corner.y * 0.5) * p.spriteCell.zw;
     out.sprite = p.spriteCell.z > 0.0 ? 1.0 : 0.0;
+    out.distance = out.position.w;
+    out.softness = p.position.w;
     return out;
 }
 
@@ -62,8 +67,21 @@ vertex WEParticleOut weParticleVertex(uint vertexID [[vertex_id]],
 /// **Premultiplied, and that is what lets light and matter share this.** The blend is
 /// `src + dst × (1 − src.a)`. Matter writes its opacity as coverage and covers what is behind it;
 /// light writes zero, and the same equation becomes a plain add.
-fragment float4 weParticleFragment(WEParticleOut in [[stage_in]], texture2d<float> sprites [[texture(0)]])
+/// **Soft particles**: 0…1, how much of a particle shows where the solid scene lies close behind it — gone where it
+/// touches, whole `softness` metres in front. 1 without the scene's depth, or for a particle that does not soften.
+static float softFade(WEParticleOut in, constant WEParticleFrame &frame, depth2d<float> solid) {
+    if (frame.depth.y < 0.5 || in.softness <= 0.0) { return 1.0; }
+    const float stored = solid.read(uint2(in.position.xy));
+    const float behind = (stored > 0.0 ? frame.depth.x / stored : 1e6) - in.distance;
+    return saturate(behind / in.softness);
+}
+
+fragment float4 weParticleFragment(WEParticleOut in [[stage_in]], texture2d<float> sprites [[texture(0)]],
+                                   depth2d<float> solid [[texture(1)]],
+                                   constant WEParticleFrame &frame [[buffer(1)]])
 {
+    const float soft = softFade(in, frame, solid);
+    if (soft <= 0.0) { discard_fragment(); }
     if (in.sprite > 0.5) {
         // **A sprite: the cell's own colour and shape**, tinted and faded by the particle. Clamped, so a cell never
         // bleeds its neighbour in at the edge.
@@ -71,11 +89,11 @@ fragment float4 weParticleFragment(WEParticleOut in [[stage_in]], texture2d<floa
         const float4 texel = sprites.sample(cell, in.uv);
         const float alpha = texel.a * in.colour.a;
         if (alpha <= 0.004 && in.colour.a > 0.0) { discard_fragment(); }
-        return float4(in.colour.rgb * texel.rgb * texel.a, alpha);
+        return float4(in.colour.rgb * texel.rgb * texel.a, alpha) * soft;
     }
     const float r = length(in.corner);
     float falloff = saturate(1.0 - r);
     falloff *= falloff;
     if (falloff <= 0.001) { discard_fragment(); }
-    return in.colour * falloff;
+    return in.colour * falloff * soft;
 }

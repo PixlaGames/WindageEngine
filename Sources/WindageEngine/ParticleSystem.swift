@@ -110,6 +110,42 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
     /// Seconds of its own motion added to a ``Alignment/velocity`` particle's length: at 10 m/s, 0.1 is another metre.
     public var stretch: Float = 0
 
+    // MARK: Meeting the world, and what follows (2026-11-01)
+
+    /// **Metres over which it fades where it meets something solid** — soft particles: smoke and fog thin out against
+    /// the ground they touch instead of cutting a hard line through it. 0 does not fade. ``ParticleRenderer`` needs the
+    /// solid scene's depth to do it, and draws the particle hard without.
+    public var softness: Float = 0
+    /// **Dies where it comes back down to the height it was born at** — a ground it lands on, as a frog's leap ends.
+    public var lands: Bool = false
+    /// **The recipe, by index, of what is born where it dies** — ``thenCount`` of them, from where it died: a frog's leap
+    /// ends in a frog sitting, which ends in the next leap; a bubble bursting throws a splash. Nil, nothing.
+    public var then: Int?
+    /// How many of ``then`` it throws when it dies.
+    public var thenCount: Int = 1
+    /// **How many times a line of ``then`` may go on**: a particle born of this many before it throws nothing more. What
+    /// keeps a frog that leaps and sits from leaping for ever.
+    public var generations: Int = 0
+    /// **The name of a mesh a game draws for each particle instead of a sprite** — a frog, a bubble — placed by
+    /// ``ParticleSystem/meshTransform(of:)``. The engine has no meshes of its own for particles; ``ParticleRenderer``
+    /// leaves these out, and the game draws them with its own shading.
+    public var mesh: String?
+
+    // MARK: Over a lifetime, and unlit (2026-11-01)
+
+    /// **Matter that is not lit** — Unity's unlit particle shaders: drawn in its own ``color``, as bright at night as by
+    /// day, where lit matter takes the light it stands in. It still covers what is behind it; light that adds is ``glows``.
+    public var unlit: Bool = false
+    /// **Its size over its life** — Unity's Size over Lifetime: `(t, multiplier)` keys, `t` 0 at birth to 1 at death,
+    /// joined in straight lines and held past the ends. Empty, ``growth`` rules.
+    public var sizeOverLife: [SIMD2<Float>] = []
+    /// **Its opacity over its life** — the alpha of Unity's Color over Lifetime: `(t, multiplier)` keys on ``opacity``.
+    /// Empty, ``fade``, ``fadeIn`` and ``fadeOut`` rule.
+    public var opacityOverLife: [SIMD2<Float>] = []
+    /// **Its colour over its life** — the colour of Unity's Color over Lifetime: `(t, r, g, b)` keys multiplying
+    /// ``color``, linear. Empty, it keeps its colour.
+    public var colourOverLife: [SIMD4<Float>] = []
+
     private var storedCount: Int
     private var storedLifetime: Float
 
@@ -119,7 +155,9 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
                 wander: Float = 0, wanderRate: Float = 0.3, maxSpeed: Float = .infinity, spawnRadius: Float = 0,
                 spawnsLevel: Bool = false, fadeIn: Float = 0, fadeOut: Float = 0, flapRate: Float = 0, sprite: Int? = nil,
                 aspect: Float = 1, alignment: Alignment = .camera, axis: SIMD3<Float> = SIMD3(0, 1, 0),
-                stretch: Float = 0) {
+                stretch: Float = 0, softness: Float = 0, lands: Bool = false, then: Int? = nil, thenCount: Int = 1,
+                generations: Int = 0, mesh: String? = nil, unlit: Bool = false, sizeOverLife: [SIMD2<Float>] = [],
+                opacityOverLife: [SIMD2<Float>] = [], colourOverLife: [SIMD4<Float>] = []) {
         self.storedCount = max(0, count)
         self.speed = speed
         self.spread = spread
@@ -145,6 +183,40 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
         self.alignment = alignment
         self.axis = simd_length_squared(axis) > 0 ? simd_normalize(axis) : SIMD3(0, 1, 0)
         self.stretch = max(stretch, 0)
+        self.softness = max(softness, 0)
+        self.lands = lands
+        self.then = then
+        self.thenCount = max(thenCount, 0)
+        self.generations = max(generations, 0)
+        self.mesh = mesh
+        self.unlit = unlit
+        self.sizeOverLife = sizeOverLife.sorted { $0.x < $1.x }
+        self.opacityOverLife = opacityOverLife.sorted { $0.x < $1.x }
+        self.colourOverLife = colourOverLife.sorted { $0.x < $1.x }
+    }
+
+    /// A curve's value at `t`: its keys joined in straight lines, held past the first and the last.
+    static func curve(_ keys: [SIMD2<Float>], at t: Float) -> Float {
+        guard let first = keys.first, let last = keys.last else { return 1 }
+        if t <= first.x { return first.y }
+        if t >= last.x { return last.y }
+        for (a, b) in zip(keys, keys.dropFirst()) where t <= b.x {
+            return b.x > a.x ? a.y + (b.y - a.y) * (t - a.x) / (b.x - a.x) : b.y
+        }
+        return last.y
+    }
+
+    /// A colour curve's value at `t`, the same way; white with no keys.
+    static func curve(_ keys: [SIMD4<Float>], at t: Float) -> SIMD3<Float> {
+        guard let first = keys.first, let last = keys.last else { return .one }
+        func rgb(_ k: SIMD4<Float>) -> SIMD3<Float> { SIMD3(k.y, k.z, k.w) }
+        if t <= first.x { return rgb(first) }
+        if t >= last.x { return rgb(last) }
+        for (a, b) in zip(keys, keys.dropFirst()) where t <= b.x {
+            let f = b.x > a.x ? (t - a.x) / (b.x - a.x) : 1
+            return simd_mix(rgb(a), rgb(b), SIMD3(repeating: f))
+        }
+        return rgb(last)
     }
 
     // MARK: Saved
@@ -153,6 +225,8 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
         case count, speed, spread, lifetime, size, growth, gravity, drag, color, opacity, fade, glows
         case wander, wanderRate, maxSpeed, spawnRadius, spawnsLevel, fadeIn, fadeOut, flapRate, sprite
         case aspect, alignment, axis, stretch
+        case softness, lands, then, thenCount, generations, mesh
+        case unlit, sizeOverLife, opacityOverLife, colourOverLife
     }
 
     /// **Saved as JSON, every field but a color optional** — a pack describes an effect in a file, and a file from
@@ -171,7 +245,11 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
                   fadeIn: value(.fadeIn, 0), fadeOut: value(.fadeOut, 0), flapRate: value(.flapRate, 0),
                   sprite: (try? c.decodeIfPresent(Int.self, forKey: .sprite)) ?? nil,
                   aspect: value(.aspect, 1), alignment: value(.alignment, .camera), axis: value(.axis, SIMD3(0, 1, 0)),
-                  stretch: value(.stretch, 0))
+                  stretch: value(.stretch, 0), softness: value(.softness, 0), lands: value(.lands, false),
+                  then: (try? c.decodeIfPresent(Int.self, forKey: .then)) ?? nil, thenCount: value(.thenCount, 1),
+                  generations: value(.generations, 0), mesh: (try? c.decodeIfPresent(String.self, forKey: .mesh)) ?? nil,
+                  unlit: value(.unlit, false), sizeOverLife: value(.sizeOverLife, []),
+                  opacityOverLife: value(.opacityOverLife, []), colourOverLife: value(.colourOverLife, []))
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -188,6 +266,17 @@ public nonisolated struct ParticleRecipe: Sendable, Equatable, Codable {
         try c.encode(flapRate, forKey: .flapRate); try c.encodeIfPresent(sprite, forKey: .sprite)
         try c.encode(aspect, forKey: .aspect); try c.encode(alignment, forKey: .alignment)
         try c.encode(axis, forKey: .axis); try c.encode(stretch, forKey: .stretch)
+        if softness > 0 { try c.encode(softness, forKey: .softness) }
+        if lands { try c.encode(lands, forKey: .lands) }
+        if let then {
+            try c.encode(then, forKey: .then); try c.encode(thenCount, forKey: .thenCount)
+            try c.encode(generations, forKey: .generations)
+        }
+        try c.encodeIfPresent(mesh, forKey: .mesh)
+        if unlit { try c.encode(unlit, forKey: .unlit) }
+        if !sizeOverLife.isEmpty { try c.encode(sizeOverLife, forKey: .sizeOverLife) }
+        if !opacityOverLife.isEmpty { try c.encode(opacityOverLife, forKey: .opacityOverLife) }
+        if !colourOverLife.isEmpty { try c.encode(colourOverLife, forKey: .colourOverLife) }
     }
 }
 
@@ -208,6 +297,14 @@ nonisolated extension ParticleRecipe {
 
     /// About how bright a clear noon sun's light is in ``DaySky/Lighting/colour``.
     static let noonLight: Float = 3.2
+
+    /// **This recipe in a system whose recipes start `offset` further along** — ``then`` moved with it. For a game
+    /// putting several effects' recipes into one system, each written counting from its own first.
+    public func shiftingThen(by offset: Int) -> ParticleRecipe {
+        var recipe = self
+        recipe.then = then.map { $0 + offset }
+        return recipe
+    }
 }
 
 /// Dust, sparks and embers: the things that say something just happened.
@@ -245,6 +342,10 @@ public nonisolated struct ParticleSystem: Sendable {
         let birth: Int
         /// 0…1, its own: where its wander and its wingbeat start, so a swarm does not move as one.
         let seed: Float
+        /// How many ``ParticleRecipe/then`` it was born at the end of: 0 for one an emitter or a burst threw.
+        public internal(set) var generation: Int = 0
+        /// The height it was born at — where a recipe that ``ParticleRecipe/lands`` comes down.
+        let ground: Float
 
         /// 0 at birth, 1 at death.
         public var progress: Float { min(1, age / lifetime) }
@@ -276,12 +377,21 @@ public nonisolated struct ParticleSystem: Sendable {
     /// Everything alive, for a renderer. Allocates; a renderer that cares iterates ``particles``.
     public var live: [Particle] { particles.filter(\.isAlive) }
 
-    /// Advances every live particle by one step.
+    /// Advances every live particle by one step — and throws what each that dies, or lands, is followed by
+    /// (``ParticleRecipe/then``).
     public mutating func step(deltaTime: Float) {
+        var following: [(recipe: Int, at: SIMD3<Float>, count: Int, generation: Int, seed: Int)] = []
+        func died(_ index: Int) {
+            free.append(index)
+            let p = particles[index], r = recipes[p.recipe]
+            if let then = r.then, p.generation < r.generations, r.thenCount > 0 {
+                following.append((then, p.position, r.thenCount, p.generation + 1, p.birth &* 31 &+ index))
+            }
+        }
         for index in particles.indices where particles[index].isAlive {
             let recipe = recipes[particles[index].recipe]
             particles[index].age += deltaTime
-            if !particles[index].isAlive { free.append(index); continue }
+            if !particles[index].isAlive { died(index); continue }
             particles[index].velocity.y += recipe.gravity * deltaTime
             if recipe.wander > 0 {
                 particles[index].velocity += ParticleSystem.wander(of: particles[index], recipe) * deltaTime
@@ -290,6 +400,15 @@ public nonisolated struct ParticleSystem: Sendable {
             let speed = simd_length(particles[index].velocity)
             if speed > recipe.maxSpeed { particles[index].velocity *= recipe.maxSpeed / speed }
             particles[index].position += particles[index].velocity * deltaTime
+            // **Landing**: coming down through the height it was born at, it stops there, and its life is over.
+            if recipe.lands, particles[index].velocity.y < 0, particles[index].position.y <= particles[index].ground {
+                particles[index].position.y = particles[index].ground
+                particles[index].age = particles[index].lifetime
+                died(index)
+            }
+        }
+        for f in following {
+            burst(f.recipe, at: f.at, seed: f.seed, generation: f.generation, count: f.count, exact: true)
         }
     }
 
@@ -306,10 +425,17 @@ public nonisolated struct ParticleSystem: Sendable {
                                direction: SIMD3<Float> = SIMD3(0, 1, 0),
                                seed: Int,
                                count: Int? = nil) {
+        burst(recipe, at: origin, direction: direction, seed: seed, generation: 0, count: count, exact: false)
+    }
+
+    /// A burst at `generation`; `exact` throws `count` whatever the recipe's own count — a ``ParticleRecipe/then``'s.
+    private mutating func burst(_ recipe: Int, at origin: SIMD3<Float>, direction: SIMD3<Float> = SIMD3(0, 1, 0),
+                                seed: Int, generation: Int, count: Int?, exact: Bool) {
         guard recipes.indices.contains(recipe) else { return }
         let r = recipes[recipe]
         let axis = simd_length_squared(direction) > 0 ? simd_normalize(direction) : SIMD3(0, 1, 0)
-        for i in 0..<min(count ?? r.count, r.count) {
+        let thrown = exact ? max(count ?? r.count, 0) : min(count ?? r.count, r.count)
+        for i in 0..<thrown {
             let a = ParticleSystem.hash(seed, i * 3 + 0)
             let b = ParticleSystem.hash(seed, i * 3 + 1)
             let c = ParticleSystem.hash(seed, i * 3 + 2)
@@ -339,7 +465,9 @@ public nonisolated struct ParticleSystem: Sendable {
                          size: r.size * (0.7 + c * 0.6),
                          recipe: recipe,
                          birth: births,
-                         seed: ParticleSystem.hash(seed, i * 7 + 2_000_003)))
+                         seed: ParticleSystem.hash(seed, i * 7 + 2_000_003),
+                         generation: generation,
+                         ground: place.y))
         }
         births += 1
     }
@@ -368,10 +496,18 @@ public nonisolated struct ParticleSystem: Sendable {
     public func appearance(of particle: Particle) -> (color: SIMD3<Float>, coverage: Float, size: Float) {
         let r = recipes[particle.recipe]
         let t = particle.progress
-        let appearing = r.fadeIn > 0 ? min(particle.age / r.fadeIn, 1) : 1
-        let going = r.fadeOut > 0 ? min(max(particle.lifetime - particle.age, 0) / r.fadeOut, 1) : 1
-        let opacity = r.opacity * pow(max(0, 1 - t), r.fade) * appearing * going
-        return (r.color * opacity, r.glows ? 0 : opacity, particle.size * (1 + r.growth * t))
+        let opacity: Float
+        if r.opacityOverLife.isEmpty {
+            let appearing = r.fadeIn > 0 ? min(particle.age / r.fadeIn, 1) : 1
+            let going = r.fadeOut > 0 ? min(max(particle.lifetime - particle.age, 0) / r.fadeOut, 1) : 1
+            opacity = r.opacity * pow(max(0, 1 - t), r.fade) * appearing * going
+        } else {
+            opacity = r.opacity * ParticleRecipe.curve(r.opacityOverLife, at: t)
+        }
+        let size = r.sizeOverLife.isEmpty ? particle.size * (1 + r.growth * t)
+            : particle.size * ParticleRecipe.curve(r.sizeOverLife, at: t)
+        let colour = r.color * ParticleRecipe.curve(r.colourOverLife, at: t)
+        return (colour * opacity, r.glows ? 0 : opacity, size)
     }
 
     /// **The two half-edges of its quad in the world** — right and up from its centre — for its size now, its wingbeat,
@@ -401,6 +537,25 @@ public nonisolated struct ParticleSystem: Sendable {
         let length = simd_length(across)
         across = length > 1e-3 ? across / length : cameraRight
         return (across * width, along * height)
+    }
+
+    /// **Where a game draws a ``ParticleRecipe/mesh`` particle**: at its position, scaled by its size now, and turned for
+    /// its alignment — a ``ParticleRecipe/Alignment/velocity`` one with its mesh's +z along its motion and its +y as near
+    /// up as that allows (a frog in mid-leap, nose first); any other set square to the world, as Unity's world-aligned
+    /// mesh particles are.
+    public func meshTransform(of particle: Particle) -> simd_float4x4 {
+        let r = recipes[particle.recipe]
+        let size = appearance(of: particle).size
+        var right = SIMD3<Float>(1, 0, 0), up = SIMD3<Float>(0, 1, 0), forward = SIMD3<Float>(0, 0, 1)
+        let speed = simd_length(particle.velocity)
+        if r.alignment == .velocity, speed > 1e-4 {
+            forward = particle.velocity / speed
+            let side = simd_cross(SIMD3(0, 1, 0), forward)
+            right = simd_length(side) > 1e-4 ? simd_normalize(side) : SIMD3(1, 0, 0)
+            up = simd_cross(forward, right)
+        }
+        return simd_float4x4(columns: (SIMD4(right * size, 0), SIMD4(up * size, 0), SIMD4(forward * size, 0),
+                                       SIMD4(particle.position, 1)))
     }
 
     /// **How wide it is drawn against its size, 0…1** — a wingbeat for a recipe that flaps, else 1. The width closes
