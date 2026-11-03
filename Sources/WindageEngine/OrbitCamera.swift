@@ -108,11 +108,21 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
         /// buries the camera in the ground and the world turns to fog.
         public var groundClearance: Float = 0.5
 
+        /// How far above a liquid's surface the camera must stay, in meters (``CharacterController/Surroundings/liquidHeight``).
+        ///
+        /// **The camera rises over it rather than pulling in**: wading, the aim point is itself near the surface, so
+        /// pulling toward it leaves the camera just as low — under, the frame is the liquid's colour from edge to edge.
+        /// Lifted, it looks down a little more at the character, from where it was. **Less than the ground's**: the
+        /// surface is not in the way of the view as a bank is, it only must not be crossed, and its near plane's
+        /// corners reach a few centimetres below the camera.
+        public var liquidClearance: Float = 0.3
+
         public init(distanceRange: ClosedRange<Float> = 2.5...18, pitchLimit: Float = 78 * .pi / 180,
                     restingPitch: Float = 7 * .pi / 180, restingDistance: Float = 5.5,
                     recentreWait: Float = 0.5, recentreTurnTime: Float = 1.2, recentreZoomTime: Float = 1.2 * 1.4,
                     followHalfLife: Float = 0.08, recoveryHalfLife: Float = 0.6,
-                    probeRadius: Float = 0.4, minimumDistance: Float = 0.8, groundClearance: Float = 0.5) {
+                    probeRadius: Float = 0.4, minimumDistance: Float = 0.8, groundClearance: Float = 0.5,
+                    liquidClearance: Float = 0.3) {
             self.distanceRange = distanceRange
             self.pitchLimit = pitchLimit
             self.restingPitch = restingPitch
@@ -125,6 +135,7 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
             self.probeRadius = probeRadius
             self.minimumDistance = minimumDistance
             self.groundClearance = groundClearance
+            self.liquidClearance = liquidClearance
         }
     }
 
@@ -188,6 +199,15 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
     /// The sideways offset actually used: the smaller of what was asked for and what fits.
     public var workingShoulderOffset: Float { min(shoulderOffset, shoulderClearance) }
 
+    /// **How far the camera is raised to keep it above a liquid**, smoothed — up at once, down over
+    /// ``Tuning/recoveryHalfLife``, the scenery's rule upside down. See ``Tuning/liquidClearance``.
+    public private(set) var liquidLift: Float = 0
+
+    /// **How far the aim point is raised to keep it above a liquid**, smoothed the same way. Wading deeper than the
+    /// shoulder, what the camera looks at is under the surface, and a camera kept above it still looks down into the
+    /// liquid's colour — so the point it looks at comes up too, to just over the surface by the character's head.
+    public private(set) var aimLift: Float = 0
+
     /// **45°**, vertical, in radians.
     ///
     /// Wide angles make a third-person subject small and distant and they exaggerate perspective, so a character near
@@ -215,15 +235,19 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
 
     // MARK: - Where it is
 
-    public var aimPoint: SIMD3<Float> { shoulder + groundRight * workingShoulderOffset }
+    /// What the camera looks at: the shoulder, moved out by the shoulder offset, and raised over a liquid (``aimLift``).
+    public var aimPoint: SIMD3<Float> { shoulder + groundRight * workingShoulderOffset + SIMD3(0, aimLift, 0) }
 
     /// The point over the character the orbit is about before the shoulder offset: ``focus`` raised by
     /// ``shoulderHeight``. With no offset it is the ``aimPoint``.
     public var shoulder: SIMD3<Float> { focus + SIMD3(0, shoulderHeight, 0) }
 
     /// Where the camera actually sits, derived rather than stored, so focus and angles are the only state that can
-    /// disagree with each other.
-    public var position: SIMD3<Float> { aimPoint + offsetDirection * workingDistance }
+    /// disagree with each other — raised by ``liquidLift`` over a liquid.
+    public var position: SIMD3<Float> { orbitPosition + SIMD3(0, liquidLift, 0) }
+
+    /// Where the orbit puts the camera from ``aimPoint``, before the camera's own lift over a liquid.
+    public var orbitPosition: SIMD3<Float> { aimPoint + offsetDirection * workingDistance }
 
     /// Which way the camera sits from what it is looking at. Unit length by construction, and the ray the obstruction
     /// test is cast along — so the test and the placement cannot disagree.
@@ -282,6 +306,8 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
         // As the distance: the offset seen is the nearer of asked and allowed, so that is what is blended.
         camera.shoulderClearance = start.workingShoulderOffset
             + (end.workingShoulderOffset - start.workingShoulderOffset) * t
+        camera.liquidLift = start.liquidLift + (end.liquidLift - start.liquidLift) * t
+        camera.aimLift = start.aimLift + (end.aimLift - start.aimLift) * t
         return camera
     }
 
@@ -377,7 +403,7 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
 
     /// Takes the camera in to what the scenery allows along its own line, and lets it back out gently:
     /// ``allowedDistance(aimPoint:direction:desired:in:tuning:)`` from ``aimPoint`` along ``offsetDirection``, as far
-    /// as the zoom could ever reach, then ``constrain(to:deltaTime:)``.
+    /// as the zoom could ever reach, then ``constrain(to:deltaTime:)``; then up over any liquid (``aimLift``, ``liquidLift``).
     ///
     /// **A third-person camera that clips is a third-person camera that stops working.** Back into a pillar and the
     /// view is swallowed by it: the player is looking at the inside of a wall with no way to tell which way is out.
@@ -399,6 +425,32 @@ public nonisolated struct OrbitCamera: Sendable, Equatable {
         constrain(to: Self.allowedDistance(aimPoint: aimPoint, direction: offsetDirection,
                                            desired: tuning.distanceRange.upperBound, in: surroundings, tuning: tuning),
                   deltaTime: deltaTime)
+        // **Then up, over any liquid**: the aim point first, measured where it is without its own lift; then the camera,
+        // measured where the orbit puts it from the aim point as now lifted — each answering where it would be without
+        // its own lift, so neither can hold itself up.
+        let shoulderPoint = shoulder + groundRight * workingShoulderOffset
+        Self.rise(&aimLift, toward: Self.liquidLift(at: shoulderPoint, in: surroundings, clearance: tuning.liquidClearance),
+                  deltaTime: deltaTime, halfLife: tuning.recoveryHalfLife)
+        Self.rise(&liquidLift, toward: Self.liquidLift(at: orbitPosition, in: surroundings, clearance: tuning.liquidClearance),
+                  deltaTime: deltaTime, halfLife: tuning.recoveryHalfLife)
+    }
+
+    /// Up at once, down over `halfLife` — ``ease(_:toward:deltaTime:halfLife:)``'s rule upside down.
+    private static func rise(_ value: inout Float, toward target: Float, deltaTime: Float, halfLife: Float) {
+        if target >= value {
+            value = target
+        } else {
+            value += (target - value) * (1 - exp2(-deltaTime / halfLife))
+            if value - target < 0.005 { value = target }
+        }
+    }
+
+    /// How far `point` must rise to sit ``Tuning/liquidClearance`` above the liquid over it — 0 out of one, or already
+    /// clear of it.
+    public static func liquidLift(at point: SIMD3<Float>, in surroundings: CharacterController.Surroundings,
+                                  clearance: Float) -> Float {
+        guard let surface = surroundings.liquidHeight?(point.x, point.z) else { return 0 }
+        return max(surface + clearance - point.y, 0)
     }
 
     /// Takes the camera in to `allowed`, and lets it back out gently.

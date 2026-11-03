@@ -223,14 +223,28 @@ public nonisolated struct CharacterController: Sendable {
         /// inside it too (``OrbitCamera/keepClear(of:deltaTime:)``). Nil, no edge and no net.
         public var boundary: WorldBoundary?
 
+        /// **The top of any water — or any other liquid — over a world x/z**, nil where there is none. Not something
+        /// to stand on: a body walks the bed beneath it, slowed by how deep it wades (``Tuning/wadingPace``), and a
+        /// camera stays above it (``OrbitCamera/keepClear(of:deltaTime:)``) — a camera under the surface sees nothing
+        /// but the liquid's colour. Nil, no liquid anywhere.
+        public var liquidHeight: (@Sendable (Float, Float) -> Float?)?
+
         public init(groundHeight: @escaping @Sendable (Float, Float) -> Float = { _, _ in 0 },
                     solids: [Solid] = [], meshes: CollisionMesh? = nil,
-                    isBlocked: (@Sendable (SIMD2<Float>) -> Bool)? = nil, boundary: WorldBoundary? = nil) {
+                    isBlocked: (@Sendable (SIMD2<Float>) -> Bool)? = nil, boundary: WorldBoundary? = nil,
+                    liquidHeight: (@Sendable (Float, Float) -> Float?)? = nil) {
             self.groundHeight = groundHeight
             self.solids = solids
             self.meshes = meshes
             self.isBlocked = isBlocked
             self.boundary = boundary
+            self.liquidHeight = liquidHeight
+        }
+
+        /// How deep `feet` stand in a liquid: its surface less the feet, 0 out of one.
+        public func liquidDepth(at feet: SIMD3<Float>) -> Float {
+            guard let surface = liquidHeight?(feet.x, feet.z) else { return 0 }
+            return max(surface - feet.y, 0)
         }
     }
 
@@ -304,6 +318,29 @@ public nonisolated struct CharacterController: Sendable {
 
         /// How far the top of the body is above the eye. The body is `eye height + this` tall.
         public var headroom: Float = 0.15
+
+        /// **How fast a body wades**: points along a curve of how deep it stands (``Surroundings/liquidHeight`` less
+        /// its feet, as a fraction of its standing height) against the fraction of its pace it keeps, in order of
+        /// depth; between points the pace is read off the line, past the last it stays there.
+        ///
+        /// **Knee-deep barely slows, waist-deep halves, chest-deep is a crawl** — and never stops: deep water is a
+        /// slow way across, not a wall, so a route through it stays open and the dry way round is simply quicker.
+        /// The knee, waist and chest of a body are about 0.28, 0.55 and 0.72 of its height. Empty, water costs nothing.
+        public var wadingPace: [SIMD2<Float>] = [SIMD2(0, 1), SIMD2(0.28, 0.85), SIMD2(0.55, 0.5), SIMD2(0.72, 0.2)]
+
+        /// From this deep, as a fraction of the standing height, a sprint is a walk — waist-deep, nobody runs.
+        public var wadingSprintDepth: Float = 0.55
+
+        /// The fraction of its pace a body keeps standing `depth` metres deep, by ``wadingPace``.
+        public func wadingFraction(atDepth depth: Float) -> Float {
+            guard depth > 0, let first = wadingPace.first else { return 1 }
+            let share = depth / max(bodyHeight(for: eyeHeight), 1e-3)
+            if share <= first.x { return first.y }
+            for (a, b) in zip(wadingPace, wadingPace.dropFirst()) where share <= b.x {
+                return a.y + (b.y - a.y) * (share - a.x) / max(b.x - a.x, 1e-6)
+            }
+            return wadingPace[wadingPace.count - 1].y
+        }
 
         /// The tallest ledge walked onto without a jump.
         ///
@@ -415,6 +452,10 @@ public nonisolated struct CharacterController: Sendable {
 
     /// Meters per second, positive up.
     public private(set) var verticalVelocity: Float = 0
+
+    /// How deep the feet stood in a liquid when the last step began, in metres — 0 on dry ground. See
+    /// ``Tuning/wadingPace``.
+    public private(set) var wadingDepth: Float = 0
 
     /// Whether the feet are on something.
     public private(set) var isGrounded = true
@@ -705,6 +746,12 @@ public nonisolated struct CharacterController: Sendable {
             }
         }
 
+        // --- Wading, slower the deeper (``Tuning/wadingPace``), and no sprint from waist-deep — so no slide out of one
+        // either: measured where the feet stand as the step begins.
+        wadingDepth = world.liquidDepth(at: feet)
+        let wading = tuning.wadingFraction(atDepth: wadingDepth)
+        let canSprint = wadingDepth < tuning.wadingSprintDepth * tuning.bodyHeight(for: tuning.eyeHeight)
+
         // --- Slide: started on the *edge* of crouching, at sprint speed, while actually moving.
         let moving = input.forward != 0 || input.strafe != 0
         if crouching && !wasCrouching && wasSprinting && moving && isGrounded {
@@ -718,7 +765,7 @@ public nonisolated struct CharacterController: Sendable {
         let slideWas = slideTimeRemaining
         slideTimeRemaining = max(0, slideTimeRemaining - dt)
         wasCrouching = crouching
-        wasSprinting = input.isSprinting && moving
+        wasSprinting = input.isSprinting && canSprint && moving
 
         // --- Room to stand. **A choice to stand is not a promise of room to**: under a beam the body
         // stays down, in every respect — height, speed, stride, no sprint — until it is clear, and
@@ -752,9 +799,9 @@ public nonisolated struct CharacterController: Sendable {
         }
 
         // Crouched you walk, slowly. Sprinting from a crouch would make the posture free.
-        var speed = crouched
+        var speed = (crouched
             ? tuning.walkSpeed * tuning.crouchedSpeedFraction
-            : (input.isSprinting ? tuning.sprintSpeed : tuning.walkSpeed)
+            : (input.isSprinting && canSprint ? tuning.sprintSpeed : tuning.walkSpeed)) * wading
         // Unless you are sliding, in which case the sprint's speed bleeds off into the crouch's —
         // held early and let go late, which reads as momentum rather than as being dragged to a halt.
         //
@@ -770,7 +817,7 @@ public nonisolated struct CharacterController: Sendable {
             let share = dt > 0
                 ? span * (pow(from, easing + 1) - pow(to, easing + 1)) / ((easing + 1) * dt)
                 : pow(to, easing)
-            speed += (tuning.sprintSpeed - speed) * share
+            speed += (tuning.sprintSpeed * wading - speed) * share
         }
 
         // --- Posture height, at a rate.
