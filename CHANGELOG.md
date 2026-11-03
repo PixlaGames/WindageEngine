@@ -4,6 +4,50 @@ Every release of Windage Engine, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Skinning on the GPU** — `SkinnedModel` loads a skinned USD character, including one exported as many separate skinned parts (body, head, hair, armor), into a single mesh with its parts grouped by material. `makeInstance()` gives a `SkinnedInstance` that holds its own `pose`. `SkinningPass` skins every instance in one compute dispatch per character per frame. Encode it in `GameLoop.encodePrePasses(into:frameSlot:interpolation:)` and draw from `vertexBufferAddress(_:frameSlot:)` or `posedBuffer(_:frameSlot:)`. `SkinnedGeometry.read(url:vertexDescriptor:semantics:)` reads the same data without a device, and `SkinnedModel.triangles(boundTo:least:)` returns the triangles bound to part of the rig.
+- **Mixing and layering clips** — `SkeletonPose.set(mixing:)` blends any number of weighted playheads. It normalizes the weights and handles quaternion hemispheres correctly. `SkeletonPose.overlay(_:mask:modelRotationAt:)` lays clips over part of the rig, for example an upper body aiming while the legs keep walking. `Skeleton.mask(from:weight:)` builds the mask for a joint and everything below it.
+- **Locomotion blending** — `LocomotionBlend.choose(airborne:rising:groundSpeed:heading:clips:)` picks the idle, gait, rise and fall clips and their weights from the body's state. Gaits (`LocomotionBlend.Gait`) are keyed to the speed each clip was authored at, and a gait can have directional clips (`LocomotionBlend.Direction`) such as strafes and backpedals. `LocomotionBlend.Clips` describes a game's clip set, and `StrideClock` keeps every stride on one phase.
+- **`FigureMotion`** — turns a body's state (`FigureMotion.Body`) into the clips to sample this frame (`[FigureMotion.Play]`). It eases between clips, keeps every gait on a shared stride phase, plays a jump from take-off, runs the stride backwards when backpedaling, and layers one-shots such as a swing or a flinch on top (`FigureMotion.OneShot`, with an `envelope(at:lasting:fadeIn:fadeOut:)` helper).
+- **`StrideAlignment`** — `StrideAlignment.align(_:on:footJoint:…)` measures where each gait's stride lines up with the others' on a skeleton. Blended walks and runs then don't cross their legs.
+- **Root motion on clips** — `AnimationClip.travel(ofJoint:)` gives how far a joint moves over the clip, which is the speed a gait was authored at. `AnimationClip.inPlace(joint:)` removes a joint's travel along the ground so the game can move the figure instead.
+- **`OrbitCamera`** — a third-person camera with orbit and zoom, smoothed follow, recentering behind the character (`recentre(behind:deltaTime:active:)`) and an over-the-shoulder offset. It pulls in when something blocks the view (`keepClear(of:deltaTime:)`, `constrain(to:deltaTime:)`, `allowedDistance(…)`). `OrbitCamera.interpolated(from:to:alpha:)` interpolates between fixed steps, and `viewMatrix` and `projectionMatrix(aspect:)` follow the engine's reversed-Z convention.
+- **`CharacterFacing`** — turns a third-person character toward its movement over a short half-life. Backing away keeps it facing forward, `isHeld` holds its facing during an attack, `isBackpedaling` reports when it is backing away, and `backpedalled(_:axis:minimum:)` slows backward movement in proportion to how much of the input points back.
+- **`CameraShake`** — camera shake based on trauma that decays over time, with two channels: `landed(force:towards:)` for a directional punch when you land a blow, and `took(force:)` for a shake when you take one. Call `advance(by:)` once a step and add `offset` to the camera position. The `CameraShake.Tuning` defaults are set for `OrbitCamera`'s default framing.
+- **World boundaries** — `WorldBoundary` is a dome- or wall-shaped edge of the world, fitted to a level with `fitted(minimum:maximum:profile:)`, with `contains`, `contain`, `exit(from:direction:limit:)` and Codable support. `BoundaryRenderer` draws it in the HDR scene in one of four looks (`WorldBoundary.Look`: lattice, grid, force field or haze). A boundary can be shown always or only near the player, and `strike(at:time:)` sends ripples across it.
+- **`CharacterController.Surroundings.boundary`** — keeps the body inside a `WorldBoundary`. A body that falls below the boundary's floor is put back on the last safe ground (`safeFeet`), and `wasCaught` reports that it happened this step.
+- **`NavigationGrid`** — a walkable grid built from a `CollisionMesh` and a ground function, sized for a body (`NavigationGrid.Body`, which can be built from `CharacterController.Tuning`). `path(from:to:searchLimit:)` finds a path between two points, and `place(near:within:)`, `neighbour(of:way:)` and `position(of:)` give lower-level access.
+- **`HoldPress`** — a button held for a moment that acts once, such as holstering a weapon or reviving a friend, stepped with the simulation. `progress` drives a fill ring and `cancel()` resets a hold that is under way.
+- **HUD images** — `HUDRenderer.image(_:center:size:rotation:color:)` draws a texture (a crosshair sprite, an icon) tinted and rotated. Images and shapes still composite in the order they were submitted.
+- **Particle recipes** — new `ParticleRecipe` properties:
+  - `softness` fades particles where they meet solid geometry. Pass the scene's depth to `ParticleRenderer.draw` through the new `solidDepth:` and `nearPlane:` parameters.
+  - `lands` ends a particle where it comes back down to its birth height.
+  - `then`, `thenCount` and `generations` chain recipes, throwing new particles where one dies.
+  - `mesh` lets the game draw its own mesh for each particle, placed by `ParticleSystem.meshTransform(of:)`.
+  - `unlit` draws matter in its own color regardless of the scene's light.
+  - `sizeOverLife`, `opacityOverLife` and `colourOverLife` are curves over a particle's life, like Unity's.
+
+  `ParticleRecipe.shiftingThen(by:)` lets several effects share one system, and `ParticleSystem.hasLive` is a cheap check for whether anything is alive.
+- **Sorted see-through copies** — `InstanceBatches.init(farthestFirst:from:)` orders blended copies back to front, one batch each. Copies at equal distances keep their order from frame to frame.
+- **Skipping the opaque color copy** — `GameLoop.wantsOpaqueColour` (default `true`). A game whose second pass reads only the solid scene's depth returns `false`, and the color is no longer copied every frame.
+- **Shipping and sharing compressed textures** — `CompressedTextures.cached(_:isColor:origin:quality:in:)` finds an already-compressed file without encoding anything, for example from a cache bundled with the game. `CompressedTextures.appCache(named:bundle:)` returns the right cache folder whether or not the app is sandboxed. `CompressedTextures.version` names the current cache format.
+- **`TextureStore.adopt(_:for:isColor:origin:)`** — hands the store a texture the game already loaded, so later requests for that source reuse it. `TextureSource.contents(in:)` reads a source's bytes, including an entry inside a `.usdz` file.
+
+### Changed
+
+- **The compressed-texture cache is keyed by file contents, not by path** — the same image copied into Debug, Release and archived builds is compressed once, not once per copy. Files now go in a folder named after `CompressedTextures.version` inside the cache folder, and files left by older versions are removed when a new one is made. Expect every texture to be compressed once more on the first launch after upgrading.
+- **`CollisionMesh.standingFloor(x:z:below:)` bridges narrow gaps** — a gap narrower than two footings, with floor on both sides, is now treated as floor, so a body no longer drops through the cracks between stair treads. An edge with floor on only one side still lets a body step off.
+- **Performance and stability improvements** — `CollisionMesh.firstHit(from:direction:limit:)` walks only the grid cells the ray crosses, nearest first, which makes camera and line-of-sight tests in dense geometry much cheaper. Particles too faint to show are skipped, and each particle's recipe is read once per draw. The shadow passes wait for skinning before they draw.
+
+### Fixed
+
+- **Distant mips of textures with alpha drew too dark** — compressed textures with an alpha channel (leaf sheets, cut-outs) stored premultiplied color in their mips, so far-off foliage drew nearly black. Each mip level is now un-premultiplied before encoding, and texels with no coverage take their neighbors' color instead of black.
+- **A released `FrameRenderer` could keep its memory resident** — when a `CAMetalLayer` outlived its renderer, the command queue kept every buffer and texture the renderer had made resident. That could be a gigabyte for a large scene. The renderer now removes its residency set from the queue when it is released.
+- **Meshes without normals drew unlit** — when a vertex descriptor asks for normals and a mesh loaded through Model I/O has none, smooth normals are now generated for it.
+
 ## [1.2.0] — 2026-10-29
 
 ### Added
