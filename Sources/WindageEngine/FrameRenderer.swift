@@ -285,6 +285,13 @@ public final class FrameRenderer {
     isolated deinit {
         hiddenTimer?.invalidate()
         hiddenActivity.map(ProcessInfo.processInfo.endActivity)
+        // **The queue can outlive the renderer, and would keep everything resident.** A `CAMetalLayer` keeps the queue
+        // that last presented to it, and the queue keeps every residency set added to it — so a renderer freed while its
+        // layer lived on (a view taken out of a window and kept by AppKit) left every buffer and texture it ever made
+        // resident, about a gigabyte for a large scene. Taken off here, they go with the renderer — once the last frame
+        // committed has finished, so nothing is freed under the GPU (bounded: a GPU that has given up does not hold this).
+        _ = endFrameEvent.wait(untilSignaledValue: UInt64(max(frameIndex - 1, 0)), timeoutMS: 1000)
+        commandQueue.removeResidencySet(residencySet)
     }
 
     private func stepWhileHidden() {
