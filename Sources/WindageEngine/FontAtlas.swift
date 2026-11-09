@@ -59,6 +59,7 @@ public final class FontAtlas {
     let whiteTexelUV: SIMD2<Float>
     /// Ascent, descent and leading at ``rasterHeight``.
     private let rasterLineHeight: Float
+    private let rasterAscent: Float
 
     private var glyphs: [Character: Glyph] = [:]
 
@@ -175,9 +176,19 @@ public final class FontAtlas {
                         mipmapLevel: 0, withBytes: data, bytesPerRow: sheetSize)
         self.texture = texture
         self.rasterLineHeight = Float(CTFontGetAscent(ctFont) + CTFontGetDescent(ctFont) + CTFontGetLeading(ctFont))
+        self.rasterAscent = Float(CTFontGetAscent(ctFont))
     }
 
     func glyph(for character: Character) -> Glyph? { glyphs[character] }
+
+    /// **What a game makes resident** for a font of its own, drawn through ``HUDRenderer/text(_:atBaseline:pointSize:color:font:clip:)``
+    /// — the HUD's own font is in ``HUDRenderer/allocations`` already.
+    public var allocation: any MTLAllocation { texture }
+
+    /// How far above the baseline the font's tallest glyphs reach at `pointSize`, for placing a line in a box.
+    public func ascent(pointSize: Float) -> Float {
+        rasterAscent * pointSize / Float(FontAtlas.rasterHeight)
+    }
 
     /// The distance from one baseline to the next when drawn at `pointSize`, in the same units.
     public func lineHeight(pointSize: Float) -> Float {

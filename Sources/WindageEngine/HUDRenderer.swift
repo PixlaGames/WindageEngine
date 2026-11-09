@@ -375,13 +375,23 @@ public final class HUDRenderer {
     /// top margin puts the first line's ascenders off the top edge of the screen, which is exactly
     /// what happened to the sample and was reported as the title touching the top. The first line's
     /// `origin.y` wants to be at least one `pointSize` below where you want the text to start.
+    ///
+    /// **`font`** draws it in another ``FontAtlas`` than the HUD's own — an interface with a header weight and a body
+    /// weight — which the game makes resident (``FontAtlas/allocation``). **`clip`** keeps only what falls inside
+    /// that rectangle.
     @discardableResult
     public func text(_ string: String, atBaseline origin: SIMD2<Float>, pointSize: Float,
-                     color: InterfaceColor) -> Float {
+                     color: InterfaceColor, font other: FontAtlas? = nil,
+                     clip: (origin: SIMD2<Float>, size: SIMD2<Float>)? = nil) -> Float {
         let x = origin.x, y = origin.y
-        guard color.srgb.w > 0 else { return width(of: string, pointSize: pointSize) }
+        let font = other ?? self.font
+        guard color.srgb.w > 0 else { return width(of: string, pointSize: pointSize, font: font) }
         let scale = pointSize / Float(FontAtlas.rasterHeight)
         var penX = x
+        // **A font of its own is a texture of its own** (2026-11-03): its glyphs are a run like an image's, read as
+        // coverage, and whatever is drawn next goes back to the HUD's own sheet.
+        if other != nil { beginRun(font.texture) }
+        defer { if other != nil { endRun() } }
 
         for character in string {
             guard let glyph = font.glyph(for: character) else {
@@ -402,6 +412,17 @@ public final class HUDRenderer {
                 let left = penX + glyph.bearing.x * scale
                 let top = y - (glyph.bearing.y + glyph.size.y) * scale
 
+                if let clip {
+                    // A glyph cut by a window — a compass's points scrolling under it.
+                    let pieces = InterfaceImage.clip(InterfaceImage.quad(SIMD2(left, top), SIMD2(left + w, top + h),
+                                                                         glyph.uvOrigin, glyph.uvOrigin + glyph.uvSize),
+                                                     to: clip.origin, size: clip.size)
+                    for corner in pieces {
+                        vertices.append(Vertex(position: toDevice(corner.position), uv: corner.uv, color: color.linear))
+                    }
+                    penX += glyph.advance * scale
+                    continue
+                }
                 let topLeft = toDevice(SIMD2(left, top))
                 let bottomRight = toDevice(SIMD2(left + w, top + h))
                 let uv0 = glyph.uvOrigin
@@ -426,9 +447,10 @@ public final class HUDRenderer {
         return penX - x
     }
 
-    /// Width of a string without drawing it, for right-aligning or laying out a panel behind it.
-    public func width(of string: String, pointSize: Float) -> Float {
-        font.width(of: string, pointSize: pointSize)
+    /// Width of a string without drawing it, for right-aligning or laying out a panel behind it — in the HUD's own font,
+    /// or in `font`.
+    public func width(of string: String, pointSize: Float, font other: FontAtlas? = nil) -> Float {
+        (other ?? font).width(of: string, pointSize: pointSize)
     }
 
     /// A filled ring — an annulus — approximated with `segments` quads.
@@ -497,16 +519,7 @@ public final class HUDRenderer {
     public func image(_ texture: MTLTexture, center: SIMD2<Float>, size: SIMD2<Float>, rotation: Float = 0,
                       color: InterfaceColor = InterfaceColor(srgb: SIMD4(1, 1, 1, 1))) {
         guard color.srgb.w > 0, size.x > 0, size.y > 0 else { return }
-        if runs.last?.texture !== texture {
-            // An empty glyph run left after the last image of this texture is reused rather than drawn empty.
-            if let last = runs.last, last.texture == nil, last.start == vertices.count, runs.count >= 2,
-               runs[runs.count - 2].texture === texture {
-                runs.removeLast()
-            } else {
-                if runs.isEmpty && !vertices.isEmpty { runs.append((nil, 0)) }
-                runs.append((texture, vertices.count))
-            }
-        }
+        beginRun(texture)
         let half = size / 2
         let c = cos(rotation), s = sin(rotation)
         // Clockwise on screen, where y runs down.
@@ -516,7 +529,68 @@ public final class HUDRenderer {
         for index in [0, 1, 2, 0, 2, 3] {
             vertices.append(Vertex(position: corners[index].0, uv: corners[index].1, color: color.linear, image: 1))
         }
-        // Whatever is drawn next reads the glyph sheet again, unless it is another image.
+        endRun()
+    }
+
+    /// **An image cut as interface art is cut** (2026-11-03): sliced, filled or both left whole by `cut`
+    /// (``InterfaceImage``), over the rectangle at `origin` and `size`, turned `rotation` radians clockwise about its
+    /// centre, and cut to `clip` if given — the frames, bars, dials and scrolling strips a vendor's HUD is made of.
+    /// Read and composited as ``image(_:center:size:rotation:color:)`` is.
+    public func image(_ texture: MTLTexture, origin: SIMD2<Float>, size: SIMD2<Float>, cut: InterfaceImage,
+                      rotation: Float = 0, color: InterfaceColor = InterfaceColor(srgb: SIMD4(1, 1, 1, 1)),
+                      clip: (origin: SIMD2<Float>, size: SIMD2<Float>)? = nil) {
+        guard color.srgb.w > 0, size.x > 0, size.y > 0 else { return }
+        var corners = cut.triangles(origin: origin, size: size,
+                                    textureSize: SIMD2(Float(texture.width), Float(texture.height)))
+        if rotation != 0 {
+            let centre = origin + size / 2
+            let c = cos(rotation), s = sin(rotation)
+            for k in corners.indices {
+                let p = corners[k].position - centre
+                corners[k].position = centre + SIMD2(p.x * c - p.y * s, p.x * s + p.y * c)
+            }
+        }
+        if let clip { corners = InterfaceImage.clip(corners, to: clip.origin, size: clip.size) }
+        guard !corners.isEmpty else { return }
+        beginRun(texture)
+        for corner in corners {
+            vertices.append(Vertex(position: toDevice(corner.position), uv: corner.uv, color: color.linear, image: 1))
+        }
+        endRun()
+    }
+
+    /// **An image over triangles of the game's own** (2026-11-03): each corner a place on screen and a place in the
+    /// texture, three to a triangle — a map laid under a round dial, a texture mapped across any shape. Cut to `clip` if
+    /// given; read and composited as ``image(_:center:size:rotation:color:)`` is.
+    public func image(_ texture: MTLTexture, triangles: [InterfaceImage.Corner],
+                      color: InterfaceColor = InterfaceColor(srgb: SIMD4(1, 1, 1, 1)),
+                      clip: (origin: SIMD2<Float>, size: SIMD2<Float>)? = nil) {
+        guard color.srgb.w > 0, triangles.count >= 3 else { return }
+        var corners = Array(triangles.prefix(triangles.count - triangles.count % 3))
+        if let clip { corners = InterfaceImage.clip(corners, to: clip.origin, size: clip.size) }
+        guard !corners.isEmpty else { return }
+        beginRun(texture)
+        for corner in corners {
+            vertices.append(Vertex(position: toDevice(corner.position), uv: corner.uv, color: color.linear, image: 1))
+        }
+        endRun()
+    }
+
+    /// Starts drawing from `texture`, unless that is what is being drawn from already.
+    private func beginRun(_ texture: MTLTexture) {
+        guard runs.last?.texture !== texture else { return }
+        // An empty glyph run left after the last run of this texture is reused rather than drawn empty.
+        if let last = runs.last, last.texture == nil, last.start == vertices.count, runs.count >= 2,
+           runs[runs.count - 2].texture === texture {
+            runs.removeLast()
+        } else {
+            if runs.isEmpty && !vertices.isEmpty { runs.append((nil, 0)) }
+            runs.append((texture, vertices.count))
+        }
+    }
+
+    /// Whatever is drawn next reads the glyph sheet again, unless it is drawn from this texture too.
+    private func endRun() {
         runs.append((nil, vertices.count))
     }
 
