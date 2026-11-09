@@ -4,6 +4,18 @@ Every release of Windage Engine, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Wading through water and other liquids**: `CharacterController.Surroundings` has a new `liquidHeight` closure that returns the liquid's surface height at a world x/z, or nil where there is none. A body walks the bed underneath and slows down the deeper it wades. `Surroundings.liquidDepth(at:)` returns how deep a pair of feet stands.
+- **Wading pace tuning**: `CharacterController.Tuning.wadingPace` is a curve of depth, as a fraction of standing height, against the fraction of pace kept. By default knee-deep keeps 85%, waist-deep 50% and chest-deep 20%, and deeper water stays at 20%, so it never stops a body completely. `wadingSprintDepth` sets the depth (waist-deep by default) where a sprint becomes a walk, and `wadingFraction(atDepth:)` reads the curve. An empty curve means water costs nothing.
+- **`CharacterController.wadingDepth`**: how deep the feet stood in a liquid when the last step began, or 0 on dry ground.
+- **The orbit camera stays above liquids**: `OrbitCamera.keepClear(of:deltaTime:)` now raises the camera to stay `Tuning.liquidClearance` (default 0.3 m) above any liquid in the surroundings. When the character wades deeper than the shoulder, it also raises the aim point. Both rise at once and ease back down over `recoveryHalfLife`. The amounts are readable as `liquidLift` and `aimLift` and are blended by `interpolated(from:to:alpha:)`. `orbitPosition` is where the camera would be before its own lift. `OrbitCamera.liquidLift(at:in:clearance:)` works out the lift for any point.
+- **`InterfaceImage`**: describes how a HUD image is cut. It can be nine-sliced (`border`, `borderScale`, `fillsCentre`) or partly filled (`Fill.horizontal`, `.vertical` or `.radial`). Use it for frames, bars and dials. `triangles(origin:size:textureSize:)` produces the geometry without a GPU, and `InterfaceImage.clip(_:to:size:)` cuts triangles to a rectangle.
+- **Sliced, filled and clipped HUD images**: `HUDRenderer.image(_:origin:size:cut:rotation:color:clip:)` draws a texture cut by an `InterfaceImage`, optionally rotated and clipped to a rectangle. `HUDRenderer.image(_:triangles:color:clip:)` draws a texture across any triangles you supply as `InterfaceImage.Corner`s.
+- **HUD text in your own font**: `HUDRenderer.text(_:atBaseline:pointSize:color:font:clip:)` takes an optional `FontAtlas` in place of the HUD's own font, and an optional clip rectangle, such as a compass strip scrolling under a window. `HUDRenderer.width(of:pointSize:font:)` measures text in that font. Add `FontAtlas.allocation` to your residency set before drawing with it. `FontAtlas.ascent(pointSize:)` gives the height of the font's tallest glyphs above the baseline, for placing a line in a box.
+
 ## [1.3.0] — 2026-11-03
 
 ### Added
