@@ -19,7 +19,7 @@ Add the package to your game's `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/PixlaGames/WindageEngine.git", from: "1.3.0")
+    .package(url: "https://github.com/PixlaGames/WindageEngine.git", from: "1.4.0")
 ],
 targets: [
     .executableTarget(name: "MyGame", dependencies: ["WindageEngine"])
